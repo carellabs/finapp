@@ -2,8 +2,12 @@
 /**
  * Cadena de gates de calidad y seguridad.
  *
- * Sustituye al workflow de CI: este proyecto no tiene remoto, asi que los gates
- * corren aqui. Se para en el primer fallo; ninguna fase se cierra en rojo.
+ * Es el espejo local de .github/workflows/ci.yml: los mismos pasos, aqui en serie y alli
+ * repartidos en cuatro jobs en paralelo (test, integracion, seguridad, imagenes). Un test
+ * (.github/scripts/repo-config.test.mjs) vigila que cada paso de PASOS corra en ci.yml y al
+ * reves. La unica diferencia deliberada es el audit: aqui se audita todo y el check
+ * obligatorio de CI solo produccion (el completo corre cada semana en audit.yml).
+ * Se para en el primer fallo; ninguna fase se cierra en rojo.
  */
 import { spawnSync } from 'node:child_process';
 
@@ -18,8 +22,9 @@ const PASOS = [
   ['integracion', ['run', 'test:integration']],
   ['audit', ['run', 'audit:deps']],
   ['secretos', ['run', 'scan:secrets']],
-  // Los tests del propio gate de secretos: necesitan Docker (o gitleaks) y son lentos,
-  // por eso viven aqui y no en el pre-commit.
+  // Los tests del propio gate de secretos (scripts/) y de la configuracion de GitHub, la
+  // politica de PR y la paridad con el CI (.github/scripts/): necesitan Docker (o gitleaks) y
+  // son lentos, por eso viven aqui y no en el pre-commit.
   ['tests de scripts', ['run', 'test:scripts']],
   ['build', ['run', 'build']],
   // El target `production` de los Dockerfiles no lo construye ningun otro gate: un `COPY`
