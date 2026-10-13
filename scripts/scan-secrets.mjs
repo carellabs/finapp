@@ -21,11 +21,12 @@
  * Codigos de salida:
  *   0  limpio
  *   1  hay secretos
- *   2  no se pudo escanear (git no lee el repo, gitleaks fallo o informo de errores, o
- *      no hay motor para ejecutarlo)
+ *   2  no se pudo escanear (git no lee el repo o su HEAD, gitleaks fallo o informo de errores,
+ *      o no hay motor para ejecutarlo). Un repo SIN commits (rama sin nacer) no es un error;
+ *      un HEAD roto si: no se confunden.
  */
-import { spawnSync } from 'node:child_process';
 import { stripVTControlCharacters } from 'node:util';
+import { lanzar } from './procesos.mjs';
 
 // Version Y digest: con `:latest` el gate cambiaria de comportamiento sin que nadie
 // tocase este fichero. Para actualizar: `docker buildx imagetools inspect <imagen:tag>`.
@@ -50,15 +51,14 @@ const raiz = process.cwd().replace(/\\/g, '/');
 
 // stdout pasa directo; stderr se captura para poder inspeccionarlo (ver `escanear`).
 const correr = (comando, argumentos, opciones = {}) =>
-  spawnSync(comando, argumentos, {
+  lanzar(comando, argumentos, {
     stdio: ['inherit', 'inherit', 'pipe'],
-    shell: true,
     maxBuffer: 64 * 1024 * 1024,
     ...opciones,
   });
 
 const disponible = (comando, argumentos) =>
-  spawnSync(comando, argumentos, { stdio: 'ignore', shell: true }).status === 0;
+  lanzar(comando, argumentos, { stdio: 'ignore' }).status === 0;
 
 // Antes que nada: git, en el host, tiene que poder leer este repo. Si no, gitleaks no
 // escanea nada y aun asi responde "no leaks found".
@@ -168,9 +168,43 @@ function escanear({ preparado, que }) {
   return SALIDA_ERROR;
 }
 
+/**
+ * Estado de HEAD. Que `git rev-parse --verify HEAD` falle NO significa "sin commits": falla igual
+ * con una rama sin nacer (repo recien iniciado) que con una referencia rota, y tomar lo segundo
+ * por lo primero omitia el historico sin avisar y terminaba en OK.
+ *  - `con-commits`: HEAD lleva a un commit legible.
+ *  - `sin-nacer`: HEAD es una referencia simbolica valida (`ref: refs/heads/x`) y esa rama aun no
+ *    existe. Es el estado legitimo de un repo sin commits.
+ *  - `ilegible`: cualquier otra cosa: la rama apunta a un objeto que no existe, esta vacia o
+ *    con basura, o HEAD esta desacoplado a un objeto inexistente.
+ * @returns {'con-commits' | 'sin-nacer' | 'ilegible'}
+ */
+function estadoHead() {
+  if (disponible('git', ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])) {
+    return 'con-commits';
+  }
+  // Resuelve a un objeto, pero no a un commit: el objeto no esta (o no es un commit).
+  if (disponible('git', ['rev-parse', '--verify', '--quiet', 'HEAD'])) return 'ilegible';
+  // No resuelve a nada. Sin nacer solo si HEAD es una referencia simbolica que git sabe leer;
+  // si la rama esta rota (basura, vacia) o HEAD esta desacoplado, `symbolic-ref` falla.
+  return disponible('git', ['symbolic-ref', '--quiet', 'HEAD']) ? 'sin-nacer' : 'ilegible';
+}
+
 /** Los dos pasos. Devuelve el codigo de salida del script. */
 function escanearTodo() {
-  const hayCommits = disponible('git', ['rev-parse', '--verify', 'HEAD']);
+  const head = estadoHead();
+  if (head === 'ilegible') {
+    console.error(`\n[secretos] FALLO: HEAD no se puede leer en ${raiz}.`);
+    console.error(
+      '[secretos] No es una rama sin commits: HEAD apunta a una referencia rota o a un objeto que no existe.',
+    );
+    console.error(
+      '[secretos] Sin un HEAD legible el escaneo no es fiable: esto NO es "sin commits" ni "limpio".',
+    );
+    console.error('[secretos] Revisa la referencia con `git show-ref` y `git fsck`.');
+    return SALIDA_ERROR;
+  }
+  const hayCommits = head === 'con-commits';
 
   const falloPreparado = escanear({ preparado: true, que: 'los ficheros preparados' });
   if (falloPreparado !== null) return falloPreparado;

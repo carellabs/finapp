@@ -15,31 +15,19 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { copyFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { instalarHerramientasFalsas, leerLlamadas } from './soporte/herramientas-falsas.mjs';
+import { ARGS_NODE_SIN_DEPRECACIONES, crearTemporales, ENTORNO_BASE } from './soporte/entorno.mjs';
 
 const RAIZ_FINAPP = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = join(RAIZ_FINAPP, 'scripts', 'scan-secrets.mjs');
 const CONFIG_GITLEAKS = join(RAIZ_FINAPP, '.gitleaks.toml');
 const ALFABETO = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
-// Sin variables GIT_*: si esto corriera dentro de un hook, GIT_DIR / GIT_INDEX_FILE
-// apuntarian al repo real y los repos temporales le escribirian encima.
-const ENTORNO_BASE = Object.fromEntries(
-  Object.entries(process.env).filter(([clave]) => !clave.startsWith('GIT_')),
-);
+const temporales = crearTemporales();
 
 const MENSAJE = {
   preparados: /FALLO: hay secretos en los ficheros preparados/,
@@ -48,6 +36,9 @@ const MENSAJE = {
   fallaGitleaks: /FALLO: gitleaks fallo/,
   erroresEnSalida: /FALLO: gitleaks informo de errores/,
   noEsRepo: /FALLO: git no puede leer el repositorio/,
+  headIlegible: /FALLO: HEAD no se puede leer/,
+  sinCommits: /sin commits todavia: se omite el escaneo del historico/,
+  limpio: /OK: ningun secreto detectado/,
 };
 
 // Salida de gitleaks (zerolog) tal como la emite: hora, nivel de 3 letras y mensaje. Con
@@ -90,23 +81,20 @@ const secretoFalso = () =>
 /** Rutas de Windows a barras normales, como las ve el script. */
 const comoRuta = (ruta) => ruta.replace(/\\/g, '/');
 
-const temporales = [];
-
 /** Crea una carpeta temporal que se borra al terminar el test. */
-function carpetaTemporal(prefijo) {
-  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefijo)));
-  temporales.push(dir);
-  return dir;
-}
+const carpetaTemporal = (prefijo) => temporales.crear(prefijo);
 
 function git(cwd, ...args) {
   const r = spawnSync('git', args, { cwd, env: ENTORNO_BASE, encoding: 'utf8' });
   assert.equal(r.status, 0, `git ${args.join(' ')} fallo: ${r.stderr}`);
 }
 
-/** Repo git temporal, con identidad de prueba y la config de gitleaks del repo real. */
-function crearRepo() {
-  const dir = carpetaTemporal('finapp-secretos-');
+/**
+ * Repo git temporal, con identidad de prueba y la config de gitleaks del repo real. `prefijo`
+ * es el nombre de la carpeta (con espacios, para probar rutas con espacios).
+ */
+function crearRepo(prefijo = 'finapp-secretos-') {
+  const dir = carpetaTemporal(prefijo);
   git(dir, 'init', '-q', '-b', 'main');
   git(dir, 'config', 'user.email', 'prueba@example.invalid');
   git(dir, 'config', 'user.name', 'Prueba');
@@ -120,9 +108,46 @@ const escribir = (dir, nombre, contenido) => writeFileSync(join(dir, nombre), co
 const preparar = (dir, ...rutas) => git(dir, 'add', ...rutas);
 const commit = (dir, mensaje) => git(dir, 'commit', '-q', '--no-verify', '-m', mensaje);
 
-/** Ejecuta scan-secrets.mjs con `dir` como cwd. `salida` junta stdout y stderr. */
+const HASH_INEXISTENTE = '0123456789abcdef0123456789abcdef01234567';
+
+// Formas reales de dejar HEAD ilegible en un repo que ya tiene commits (la rama es `main`).
+// El `.git/HEAD` con basura no esta: ahi git ni reconoce el repo y el escaneo ya sale 2.
+const ROTURAS_DE_HEAD = [
+  ['la rama de HEAD con basura', (dir) => escribir(dir, '.git/refs/heads/main', 'no es un hash\n')],
+  ['la rama de HEAD vacia', (dir) => escribir(dir, '.git/refs/heads/main', '')],
+  [
+    'la rama de HEAD apunta a un objeto que no existe',
+    (dir) => escribir(dir, '.git/refs/heads/main', `${HASH_INEXISTENTE}\n`),
+  ],
+  [
+    'HEAD desacoplado a un objeto que no existe',
+    (dir) => escribir(dir, '.git/HEAD', `${HASH_INEXISTENTE}\n`),
+  ],
+];
+
+/** Repo con un commit limpio y HEAD roto por `romper`, pero que git sigue reconociendo. */
+function repoConHeadRoto(romper) {
+  const dir = crearRepo();
+  escribir(dir, 'README.md', '# Proyecto limpio\n');
+  preparar(dir, 'README.md');
+  commit(dir, 'inicial');
+  romper(dir);
+  // Precondicion: es un repo para git, y HEAD ya no lleva a un commit.
+  git(dir, 'rev-parse', '--git-dir');
+  const head = spawnSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], {
+    cwd: dir,
+    env: ENTORNO_BASE,
+  });
+  assert.notEqual(head.status, 0, 'precondicion: HEAD tiene que estar roto');
+  return dir;
+}
+
+/**
+ * Ejecuta scan-secrets.mjs con `dir` como cwd. `salida` junta stdout y stderr. Con
+ * `ARGS_NODE_SIN_DEPRECACIONES`: un DEP0190 (argumentos con `shell: true`) revienta el script.
+ */
 function ejecutar(dir, entorno = ENTORNO_BASE) {
-  const r = spawnSync(process.execPath, [SCRIPT], {
+  const r = spawnSync(process.execPath, [...ARGS_NODE_SIN_DEPRECACIONES, SCRIPT], {
     cwd: dir,
     env: entorno,
     encoding: 'utf8',
@@ -155,24 +180,15 @@ if (sondeo) {
 }
 `;
 
-/** Crea una carpeta con un `gitleaks` y un `docker` falsos, ejecutables desde el PATH. */
-function crearShims() {
-  const dir = carpetaTemporal('finapp-shims-');
-  const shim = join(dir, 'shim.mjs');
-  writeFileSync(shim, SHIM);
-  for (const herramienta of ['gitleaks', 'docker']) {
-    if (process.platform === 'win32') {
-      writeFileSync(
-        join(dir, `${herramienta}.cmd`),
-        `@"${process.execPath}" "${shim}" ${herramienta} %*\r\n`,
-      );
-    } else {
-      const ruta = join(dir, herramienta);
-      writeFileSync(ruta, `#!/bin/sh\nexec "${process.execPath}" "${shim}" ${herramienta} "$@"\n`);
-      chmodSync(ruta, 0o755);
-    }
-  }
-  return { dir, log: join(dir, 'llamadas.jsonl') };
+/**
+ * Crea una carpeta con un `gitleaks` y un `docker` falsos, ejecutables desde el PATH (en
+ * Windows son `.exe`: sin shell no se ejecuta un `.cmd`; ver soporte/herramientas-falsas.mjs).
+ * `prefijo`: nombre de la carpeta (con espacios, para probar rutas con espacios).
+ */
+function crearShims(prefijo = 'finapp-shims-') {
+  const dir = carpetaTemporal(prefijo);
+  const herramientas = instalarHerramientasFalsas(dir, ['gitleaks', 'docker'], SHIM);
+  return { dir, log: join(dir, 'llamadas.jsonl'), herramientas };
 }
 
 /**
@@ -180,17 +196,15 @@ function crearShims() {
  * `salida` y `stderr`: lo que hace el escaneo falso al ejecutarse.
  */
 function entornoConShims(shims, { disponibles, salida = 0, stderr = '' }) {
-  const claveRuta = Object.keys(ENTORNO_BASE).find((k) => k.toLowerCase() === 'path') ?? 'PATH';
   const ficheroStderr = join(shims.dir, 'stderr.txt');
   writeFileSync(ficheroStderr, stderr);
-  return {
+  return shims.herramientas.entorno({
     ...ENTORNO_BASE,
-    [claveRuta]: `${shims.dir}${delimiter}${ENTORNO_BASE[claveRuta] ?? ''}`,
     SHIM_LOG: shims.log,
     SHIM_DISPONIBLES: disponibles.join(','),
     SHIM_SALIDA: String(salida),
     SHIM_STDERR_FILE: ficheroStderr,
-  };
+  });
 }
 
 /**
@@ -204,15 +218,10 @@ function carpetaSinRepo() {
 
 /** Llamadas reales (sin los sondeos de disponibilidad) hechas a los shims, en orden. */
 function llamadas(shims) {
-  if (!existsSync(shims.log)) return [];
-  return readFileSync(shims.log, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((linea) => JSON.parse(linea))
-    .filter(
-      ({ herramienta, args }) =>
-        !(args[0] === 'version' || (herramienta === 'docker' && args[0] === 'info')),
-    );
+  return leerLlamadas(shims.log).filter(
+    ({ herramienta, args }) =>
+      !(args[0] === 'version' || (herramienta === 'docker' && args[0] === 'info')),
+  );
 }
 
 /** `true` si `args` contiene `nombre` seguido justo de `valor` (p. ej. `-e` `CLAVE=v`). */
@@ -222,11 +231,7 @@ const tieneParametro = (args, nombre, valor) =>
 // ---------------------------------------------------------------------------
 
 describe('scan-secrets', () => {
-  afterEach(() => {
-    while (temporales.length > 0) {
-      rmSync(temporales.pop(), { recursive: true, force: true, maxRetries: 5 });
-    }
-  });
+  afterEach(() => temporales.borrarTodas());
 
   describe('motor real', { timeout: 600_000 }, () => {
     it('un secreto en un .env ignorado por git NO bloquea; el mismo secreto preparado SI', () => {
@@ -295,6 +300,23 @@ describe('scan-secrets', () => {
       assert.match(r.salida, /OK: ningun secreto detectado/);
     });
 
+    it('en una ruta con espacios escanea igual: limpio sale 0 y con un secreto preparado sale 1', () => {
+      const dir = crearRepo('finapp secretos con espacios-');
+      escribir(dir, 'README.md', '# Proyecto limpio\n');
+      preparar(dir, 'README.md');
+
+      const limpio = ejecutar(dir);
+      assert.equal(limpio.status, 0, limpio.salida);
+
+      // Control positivo: sin esto, el 0 de arriba podria ser un motor que no llega a leer
+      // el repo (con la ruta partida en dos argumentos) y no un repo limpio.
+      escribir(dir, 'config.txt', `token = ${secretoFalso()}\n`);
+      preparar(dir, 'config.txt');
+      const conSecreto = ejecutar(dir);
+      assert.equal(conSecreto.status, 1, conSecreto.salida);
+      assert.match(conSecreto.salida, MENSAJE.preparados);
+    });
+
     it('si gitleaks FALLA (config rota) no lo cuenta como "hay secretos": sale 2', () => {
       const dir = crearRepo();
       escribir(dir, '.gitleaks.toml', 'esto = = no es toml [\n');
@@ -335,6 +357,43 @@ describe('scan-secrets', () => {
       assert.equal(r.status, 2, r.salida);
       assert.match(r.salida, MENSAJE.noEsRepo);
       assert.doesNotMatch(r.salida, MENSAJE.cualquierHallazgo);
+    });
+
+    it('una rama sin nacer con un fichero limpio preparado sale 0 y avisa de que omite el historico', () => {
+      const dir = crearRepo();
+      escribir(dir, 'README.md', '# Proyecto limpio\n');
+      preparar(dir, 'README.md');
+
+      const r = ejecutar(dir);
+
+      assert.equal(r.status, 0, r.salida);
+      assert.match(r.salida, MENSAJE.sinCommits);
+      assert.match(r.salida, MENSAJE.limpio);
+    });
+
+    it('con HEAD ilegible y un secreto en el historico sale 2: no lo da por "sin commits" ni por limpio', () => {
+      const dir = crearRepo();
+      escribir(dir, 'config.txt', `token = ${secretoFalso()}\n`);
+      preparar(dir, 'config.txt');
+      commit(dir, 'anade config con secreto');
+      git(dir, 'rm', '-q', 'config.txt');
+      commit(dir, 'quita config');
+
+      // Control positivo: con HEAD sano, el secreto del historico se detecta. Sin esto, el 2 de
+      // abajo podria ser un motor que no ve ese secreto.
+      const sano = ejecutar(dir);
+      assert.equal(sano.status, 1, sano.salida);
+      assert.match(sano.salida, MENSAJE.historico);
+
+      // HEAD apunta a una referencia rota: antes se tomaba por "sin commits", se saltaba el
+      // historico y el escaneo terminaba en OK con el secreto dentro.
+      escribir(dir, '.git/refs/heads/main', 'no es un hash\n');
+      const roto = ejecutar(dir);
+
+      assert.equal(roto.status, 2, roto.salida);
+      assert.match(roto.salida, MENSAJE.headIlegible);
+      assert.doesNotMatch(roto.salida, MENSAJE.sinCommits);
+      assert.doesNotMatch(roto.salida, MENSAJE.limpio);
     });
   });
 
@@ -416,6 +475,33 @@ describe('scan-secrets', () => {
       assert.ok(gitleaks.includes('--staged'));
       assert.ok(gitleaks.includes('--config=/repo/.gitleaks.toml'));
       assert.equal(gitleaks.at(-1), '/repo');
+    });
+
+    it('con gitleaks nativo, una ruta con espacios llega entera: --config y el repo son UN argumento cada uno', () => {
+      const dir = crearRepo('finapp secretos con espacios-');
+      const shims = crearShims('finapp shims con espacios-');
+
+      const r = ejecutar(dir, entornoConShims(shims, { disponibles: ['gitleaks'] }));
+
+      assert.equal(r.status, 0, r.salida);
+      assert.doesNotMatch(r.salida, /DEP0190/);
+      const [{ args }] = llamadas(shims);
+      const raiz = comoRuta(dir);
+      assert.ok(raiz.includes(' '), 'precondicion: la ruta del repo lleva espacios');
+      assert.ok(args.includes(`--config=${raiz}/.gitleaks.toml`), args.join(' | '));
+      assert.equal(args.at(-1), raiz, args.join(' | '));
+    });
+
+    it('en Docker, una ruta con espacios llega entera: -v es UN argumento', () => {
+      const dir = crearRepo('finapp secretos con espacios-');
+      const shims = crearShims('finapp shims con espacios-');
+
+      const r = ejecutar(dir, entornoConShims(shims, { disponibles: ['docker'] }));
+
+      assert.equal(r.status, 0, r.salida);
+      assert.doesNotMatch(r.salida, /DEP0190/);
+      const [{ args }] = llamadas(shims);
+      assert.ok(tieneParametro(args, '-v', `${comoRuta(dir)}:/repo:ro`), args.join(' | '));
     });
 
     it('sin gitleaks ni Docker falla en duro (2), sin escanear nada', () => {
@@ -525,6 +611,36 @@ describe('scan-secrets', () => {
       assert.equal(r.status, 0, r.salida);
       assert.doesNotMatch(r.salida, /FALLO/);
     });
+
+    it('una rama sin nacer NO es un error: escanea lo preparado, omite el historico y sale 0', () => {
+      const dir = crearRepo();
+      escribir(dir, 'README.md', '# Proyecto limpio\n');
+      preparar(dir, 'README.md');
+      const shims = crearShims();
+
+      const r = ejecutar(dir, entornoConShims(shims, { disponibles: ['gitleaks'] }));
+
+      assert.equal(r.status, 0, r.salida);
+      assert.match(r.salida, MENSAJE.sinCommits);
+      assert.match(r.salida, MENSAJE.limpio);
+      assert.equal(llamadas(shims).length, 1, 'solo lo preparado: el historico se omite');
+    });
+
+    for (const [caso, romper] of ROTURAS_DE_HEAD) {
+      it(`HEAD ilegible (${caso}): sale 2 sin escanear, no lo toma por "sin commits"`, () => {
+        const dir = repoConHeadRoto(romper);
+        const shims = crearShims();
+
+        const r = ejecutar(dir, entornoConShims(shims, { disponibles: ['gitleaks'] }));
+
+        assert.equal(r.status, 2, r.salida);
+        assert.match(r.salida, MENSAJE.headIlegible);
+        assert.doesNotMatch(r.salida, MENSAJE.sinCommits);
+        assert.doesNotMatch(r.salida, MENSAJE.limpio);
+        assert.doesNotMatch(r.salida, MENSAJE.cualquierHallazgo);
+        assert.deepEqual(llamadas(shims), [], 'con HEAD ilegible ningun escaneo es fiable');
+      });
+    }
 
     it('en una carpeta que no es un repo git sale 2 sin llamar a gitleaks', () => {
       const { dir, techoGit } = carpetaSinRepo();

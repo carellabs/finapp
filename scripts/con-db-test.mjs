@@ -8,23 +8,26 @@
  * minimatch -> brace-expansion). Aqui Docker se invoca por CLI: cero
  * dependencias npm nuevas y la misma imagen que usa produccion.
  */
-import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { lanzar } from './procesos.mjs';
 
-const CONTENEDOR = 'finapp-db-test';
 const IMAGEN = 'postgres:16-alpine';
 const PUERTO = process.env.PUERTO_DB_TEST ?? '55433';
+// El nombre lleva el puerto: dos ejecuciones en paralelo (cada una con su PUERTO_DB_TEST) no
+// pueden destruirse el contenedor entre si. Con el mismo puerto SI comparten nombre, y es lo
+// que se quiere: un huerfano de una ejecucion anterior en ese puerto se limpia al empezar.
+const CONTENEDOR = `finapp-db-test-${PUERTO}`;
 const CLAVE = randomBytes(18).toString('base64url');
 const URL_BD = `postgresql://finapp:${CLAVE}@127.0.0.1:${PUERTO}/finapp_test`;
 
 const correr = (comando, argumentos, opciones = {}) =>
-  spawnSync(comando, argumentos, { stdio: 'inherit', shell: true, ...opciones });
+  lanzar(comando, argumentos, { stdio: 'inherit', ...opciones });
 
 const silencioso = (comando, argumentos) =>
-  spawnSync(comando, argumentos, { stdio: 'ignore', shell: true }).status === 0;
+  lanzar(comando, argumentos, { stdio: 'ignore' }).status === 0;
 
 function destruir() {
-  spawnSync('docker', ['rm', '-f', CONTENEDOR], { stdio: 'ignore', shell: true });
+  lanzar('docker', ['rm', '-f', CONTENEDOR], { stdio: 'ignore' });
 }
 
 if (!silencioso('docker', ['info'])) {
@@ -68,15 +71,31 @@ process.on('SIGINT', () => {
 });
 
 // Esperar a que acepte conexiones. Sin esto, la primera migracion falla.
+// Por TCP (`-h 127.0.0.1`) y no por el socket Unix: durante la inicializacion el entrypoint de
+// Postgres arranca un servidor TEMPORAL que solo escucha por socket, y `pg_isready` lo da por
+// bueno unos ms (14 a 271 medidos) antes de que el servidor definitivo acepte TCP, que es por
+// donde se conectan las migraciones desde el host. Sintomas: ECONNREFUSED, o (visto en
+// ubuntu-latest, check `integracion`) "Connection terminated unexpectedly" porque el temporal
+// se cierra durante la primera conexion de node-pg-migrate.
 let listo = false;
 for (let intento = 0; intento < 60; intento += 1) {
   if (
-    silencioso('docker', ['exec', CONTENEDOR, 'pg_isready', '-U', 'finapp', '-d', 'finapp_test'])
+    silencioso('docker', [
+      'exec',
+      CONTENEDOR,
+      'pg_isready',
+      '-h',
+      '127.0.0.1',
+      '-U',
+      'finapp',
+      '-d',
+      'finapp_test',
+    ])
   ) {
     listo = true;
     break;
   }
-  spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},500)'], { stdio: 'ignore' });
+  lanzar('node', ['-e', 'setTimeout(()=>{},500)'], { stdio: 'ignore' });
 }
 
 if (!listo) {
