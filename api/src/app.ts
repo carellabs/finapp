@@ -7,6 +7,7 @@ import { SystemClock, type Clock } from '@finapp/shared';
 import type { Env } from './config/env';
 import type { Pool } from './db/cliente';
 import { manejadorErrores, rutaNoEncontrada } from './http/errores';
+import { crearClaveCliente } from './http/ip-cliente';
 import { crearRutasAuth } from './http/rutas/auth';
 import { crearRutasCategorias } from './http/rutas/categorias';
 import { crearRutasTransacciones } from './http/rutas/transacciones';
@@ -45,11 +46,15 @@ export function crearApp(
     ventanaLoginMs = 15 * 60_000,
   } = opciones;
 
+  // Ambos limitadores cuentan por la IP real del cliente (ver ip-cliente.ts).
+  const claveCliente = crearClaveCliente({ detrasDeProxy: env.TRUST_PROXY !== false });
+
   const limiteGlobal = rateLimit({
     windowMs: 60_000,
     limit: limitePorMinutoGlobal,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: claveCliente,
   });
 
   // Rate limit especifico de login, agresivo por IP. Complementa (no
@@ -60,10 +65,14 @@ export function crearApp(
     limit: limitePorVentanaLogin,
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: claveCliente,
   });
 
   const app = express();
 
+  // Saltos de los que se acepta que reenvien la peticion; NUNCA `true` (cargarEnv
+  // lo rechaza): cualquiera podria falsificar `X-Forwarded-For`.
+  app.set('trust proxy', env.TRUST_PROXY);
   app.disable('x-powered-by');
   app.use(helmet());
   app.use(cors({ origin: env.ORIGEN_FRONTEND, credentials: true }));

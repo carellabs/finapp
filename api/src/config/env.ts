@@ -1,15 +1,29 @@
 import { z } from 'zod';
+import { interpretarTrustProxy } from './trust-proxy';
 
 /**
  * Configuracion validada en el arranque. Si falta algo, el proceso NO arranca:
  * un servidor a medio configurar falla mas tarde y peor.
  */
-const esquemaEnv = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().int().positive().max(65535).default(3000),
-  DATABASE_URL: z.string().min(1, 'DATABASE_URL es obligatoria'),
-  ORIGEN_FRONTEND: z.string().min(1, 'ORIGEN_FRONTEND es obligatorio'),
-});
+const esquemaEnv = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    PORT: z.coerce.number().int().positive().max(65535).default(3000),
+    DATABASE_URL: z.string().min(1, 'DATABASE_URL es obligatoria'),
+    ORIGEN_FRONTEND: z.string().min(1, 'ORIGEN_FRONTEND es obligatorio'),
+    // En crudo; se interpreta abajo porque la regla depende de NODE_ENV.
+    TRUST_PROXY: z.string().optional(),
+  })
+  .transform((datos, ctx) => {
+    const trustProxy = interpretarTrustProxy(datos.TRUST_PROXY, datos.NODE_ENV === 'production');
+
+    if (!trustProxy.ok) {
+      ctx.addIssue({ code: 'custom', path: ['TRUST_PROXY'], message: trustProxy.motivo });
+      return z.NEVER;
+    }
+
+    return { ...datos, TRUST_PROXY: trustProxy.valor };
+  });
 
 export type Env = z.infer<typeof esquemaEnv>;
 
