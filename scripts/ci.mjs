@@ -9,7 +9,7 @@
  * obligatorio de CI solo produccion (el completo corre cada semana en audit.yml).
  * Se para en el primer fallo; ninguna fase se cierra en rojo.
  */
-import { spawnSync } from 'node:child_process';
+import { lanzar } from './procesos.mjs';
 
 const PASOS = [
   ['lint', ['run', 'lint']],
@@ -38,7 +38,7 @@ const resultados = [];
 for (const [nombre, argumentos] of PASOS) {
   console.error(`\n──────── ${nombre} ────────`);
   const desde = Date.now();
-  const { status } = spawnSync('npm', argumentos, { stdio: 'inherit', shell: true });
+  const { status } = lanzar('npm', argumentos, { stdio: 'inherit' });
   const segundos = ((Date.now() - desde) / 1000).toFixed(1);
 
   if (status !== 0) {

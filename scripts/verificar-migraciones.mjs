@@ -7,8 +7,8 @@
  * aplicar. Una migracion que no revierte es una migracion que no se puede
  * corregir sin borrar la base de datos.
  */
-import { spawnSync } from 'node:child_process';
 import pg from 'pg';
+import { lanzar } from './procesos.mjs';
 
 const urlBd = process.env.DATABASE_URL;
 if (!urlBd) {
@@ -16,10 +16,10 @@ if (!urlBd) {
   process.exit(1);
 }
 
+// `npm exec` es lo que hace `npx`, pero npx es un .cmd en Windows y sin shell no se ejecuta.
 const migrar = (...argumentos) =>
-  spawnSync('npx', ['node-pg-migrate', '-m', 'migraciones', ...argumentos], {
+  lanzar('npm', ['exec', '--', 'node-pg-migrate', '-m', 'migraciones', ...argumentos], {
     stdio: 'inherit',
-    shell: true,
     cwd: 'api',
     env: process.env,
   });

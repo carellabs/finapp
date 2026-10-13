@@ -8,8 +8,8 @@
  * minimatch -> brace-expansion). Aqui Docker se invoca por CLI: cero
  * dependencias npm nuevas y la misma imagen que usa produccion.
  */
-import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { lanzar } from './procesos.mjs';
 
 const IMAGEN = 'postgres:16-alpine';
 const PUERTO = process.env.PUERTO_DB_TEST ?? '55433';
@@ -21,13 +21,13 @@ const CLAVE = randomBytes(18).toString('base64url');
 const URL_BD = `postgresql://finapp:${CLAVE}@127.0.0.1:${PUERTO}/finapp_test`;
 
 const correr = (comando, argumentos, opciones = {}) =>
-  spawnSync(comando, argumentos, { stdio: 'inherit', shell: true, ...opciones });
+  lanzar(comando, argumentos, { stdio: 'inherit', ...opciones });
 
 const silencioso = (comando, argumentos) =>
-  spawnSync(comando, argumentos, { stdio: 'ignore', shell: true }).status === 0;
+  lanzar(comando, argumentos, { stdio: 'ignore' }).status === 0;
 
 function destruir() {
-  spawnSync('docker', ['rm', '-f', CONTENEDOR], { stdio: 'ignore', shell: true });
+  lanzar('docker', ['rm', '-f', CONTENEDOR], { stdio: 'ignore' });
 }
 
 if (!silencioso('docker', ['info'])) {
@@ -95,7 +95,7 @@ for (let intento = 0; intento < 60; intento += 1) {
     listo = true;
     break;
   }
-  spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},500)'], { stdio: 'ignore' });
+  lanzar('node', ['-e', 'setTimeout(()=>{},500)'], { stdio: 'ignore' });
 }
 
 if (!listo) {

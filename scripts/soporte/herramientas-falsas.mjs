@@ -14,11 +14,45 @@
  *    proceso se llama `docker.exe`, ejecute `programa` y salga. En cualquier otro proceso node
  *    (el propio script bajo prueba) la precarga no hace nada.
  */
-import { copyFileSync, linkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, linkSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const EN_WINDOWS = process.platform === 'win32';
+
+// npm falso: lo que ejecuta `node $npm_execpath ...`. Registra sus argumentos y falla si el
+// script que se le pide (`npm run <script>`) es FALSA_NPM_FALLA_EN.
+const NPM_FALSO = `
+import { appendFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+appendFileSync(process.env.FALSA_LOG, JSON.stringify({ herramienta: 'npm', args }) + '\\n');
+if (args[1] === process.env.FALSA_NPM_FALLA_EN) process.exitCode = 1;
+`;
+
+/**
+ * Crea un npm falso y devuelve su ruta, para fijarla en `npm_execpath` (asi es como los
+ * scripts localizan npm). Registra en FALSA_LOG un `{ herramienta: 'npm', args }` por llamada.
+ * @param {string} dir carpeta ya gestionada por el llamador
+ * @returns {string}
+ */
+export function instalarNpmFalso(dir) {
+  const ruta = join(dir, 'npm-cli-falso.mjs');
+  writeFileSync(ruta, NPM_FALSO);
+  return ruta;
+}
+
+/**
+ * Lee el registro de llamadas (una linea JSON por llamada) que dejan las herramientas falsas.
+ * @param {string} log
+ * @returns {Array<Record<string, any>>}
+ */
+export function leerLlamadas(log) {
+  if (!existsSync(log)) return [];
+  return readFileSync(log, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((linea) => JSON.parse(linea));
+}
 
 /**
  * Precarga de Windows. `process.argv[1]` ya viene resuelto contra el cwd (node cree que es el

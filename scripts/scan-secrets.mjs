@@ -24,8 +24,8 @@
  *   2  no se pudo escanear (git no lee el repo, gitleaks fallo o informo de errores, o
  *      no hay motor para ejecutarlo)
  */
-import { spawnSync } from 'node:child_process';
 import { stripVTControlCharacters } from 'node:util';
+import { lanzar } from './procesos.mjs';
 
 // Version Y digest: con `:latest` el gate cambiaria de comportamiento sin que nadie
 // tocase este fichero. Para actualizar: `docker buildx imagetools inspect <imagen:tag>`.
@@ -50,15 +50,14 @@ const raiz = process.cwd().replace(/\\/g, '/');
 
 // stdout pasa directo; stderr se captura para poder inspeccionarlo (ver `escanear`).
 const correr = (comando, argumentos, opciones = {}) =>
-  spawnSync(comando, argumentos, {
+  lanzar(comando, argumentos, {
     stdio: ['inherit', 'inherit', 'pipe'],
-    shell: true,
     maxBuffer: 64 * 1024 * 1024,
     ...opciones,
   });
 
 const disponible = (comando, argumentos) =>
-  spawnSync(comando, argumentos, { stdio: 'ignore', shell: true }).status === 0;
+  lanzar(comando, argumentos, { stdio: 'ignore' }).status === 0;
 
 // Antes que nada: git, en el host, tiene que poder leer este repo. Si no, gitleaks no
 // escanea nada y aun asi responde "no leaks found".

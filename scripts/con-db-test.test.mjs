@@ -1,38 +1,29 @@
 /**
  * Tests de scripts/con-db-test.mjs (el Postgres efimero de los tests de integracion).
  *
- * Caja negra con `docker` y `npm` FALSOS delante en el PATH (ver soporte/herramientas-falsas.mjs):
- * registran con que argumentos se les invoca y, en el caso de `pg_isready`, reproducen lo que
- * hace la imagen oficial de Postgres al arrancar. El PATH esta aislado: ningun `docker` real
- * esta al alcance, asi que estos tests no pueden tocar un contenedor de verdad.
+ * Caja negra con un `docker` FALSO delante en el PATH y un npm falso en `npm_execpath` (ver
+ * soporte/herramientas-falsas.mjs): registran con que argumentos se les invoca y, en el caso de
+ * `pg_isready`, el docker reproduce lo que hace la imagen oficial de Postgres al arrancar. El
+ * PATH esta aislado: ningun `docker` real esta al alcance, asi que estos tests no pueden tocar
+ * un contenedor de verdad. El script se ejecuta sin tolerar deprecaciones: un DEP0190
+ * (argumentos con `shell: true`) revienta el test.
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { instalarHerramientasFalsas } from './soporte/herramientas-falsas.mjs';
+import {
+  instalarHerramientasFalsas,
+  instalarNpmFalso,
+  leerLlamadas,
+} from './soporte/herramientas-falsas.mjs';
+import { ARGS_NODE_SIN_DEPRECACIONES, crearTemporales, ENTORNO_BASE } from './soporte/entorno.mjs';
 
 const RAIZ_FINAPP = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = join(RAIZ_FINAPP, 'scripts', 'con-db-test.mjs');
-
-// Sin variables GIT_* (si esto corriera dentro de un hook apuntarian al repo real), sin el
-// puerto del entorno de quien lanza los tests y sin DATABASE_URL.
-const ENTORNO_BASE = Object.fromEntries(
-  Object.entries(process.env).filter(
-    ([clave]) =>
-      !clave.startsWith('GIT_') && clave !== 'PUERTO_DB_TEST' && clave !== 'DATABASE_URL',
-  ),
-);
+const temporales = crearTemporales();
 
 // Docker falso. `pg_isready` reproduce la imagen oficial de Postgres: mientras el entrypoint
 // inicializa la base arranca un servidor TEMPORAL que solo escucha por socket Unix, y el
@@ -56,10 +47,7 @@ if (herramienta === 'docker' && args[0] === 'exec' && args.includes('pg_isready'
   }
   registrar({ listo });
   process.exitCode = listo ? 0 : 2;
-} else if (
-  (herramienta === 'docker' && ['info', 'run', 'rm'].includes(args[0])) ||
-  herramienta === 'npm'
-) {
+} else if (herramienta === 'docker' && ['info', 'run', 'rm'].includes(args[0])) {
   registrar();
 } else {
   registrar({ inesperada: true });
@@ -76,48 +64,36 @@ appendFileSync(
 );
 `;
 
-const temporales = [];
-
-/** Crea una carpeta temporal que se borra al terminar. */
-function carpetaTemporal(prefijo) {
-  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefijo)));
-  temporales.push(dir);
-  return dir;
-}
-
-/** Lee el registro de llamadas que dejan las herramientas falsas. */
-function leerLlamadas(log) {
-  if (!existsSync(log)) return [];
-  return readFileSync(log, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((linea) => JSON.parse(linea));
-}
-
 /**
  * Ejecuta con-db-test.mjs con docker y npm falsos. `puerto` undefined = sin PUERTO_DB_TEST.
- * `fallosTcp`: cuantas veces `pg_isready -h 127.0.0.1` responde "todavia no".
+ * `fallosTcp`: cuantas veces `pg_isready -h 127.0.0.1` responde "todavia no". `prefijo`: nombre
+ * de la carpeta temporal, donde viven los falsos (con espacios, para probar rutas con espacios).
  */
-function ejecutar({ puerto, fallosTcp = 0 }) {
-  const dir = carpetaTemporal('finapp-con-db-test-');
+function ejecutar({ puerto, fallosTcp = 0, prefijo = 'finapp-con-db-test-' }) {
+  const dir = temporales.crear(prefijo);
   const log = join(dir, 'llamadas.jsonl');
-  const herramientas = instalarHerramientasFalsas(dir, ['docker', 'npm'], PROGRAMA);
+  const herramientas = instalarHerramientasFalsas(dir, ['docker'], PROGRAMA);
   writeFileSync(join(dir, 'comando.mjs'), COMANDO);
   const base = {
     ...ENTORNO_BASE,
     FALSA_LOG: log,
     FALSA_ESTADO: join(dir, 'sondeos-tcp.txt'),
     FALSA_FALLOS_TCP: String(fallosTcp),
+    npm_execpath: instalarNpmFalso(dir),
   };
   if (puerto !== undefined) base.PUERTO_DB_TEST = String(puerto);
 
-  // cwd = la carpeta temporal y comando con ruta relativa: nada depende de rutas con espacios.
-  const r = spawnSync(process.execPath, [SCRIPT, 'node', 'comando.mjs'], {
-    cwd: dir,
-    env: herramientas.entorno(base, { aislado: true }),
-    encoding: 'utf8',
-    timeout: 120_000,
-  });
+  // cwd = la carpeta temporal y el comando con ruta relativa.
+  const r = spawnSync(
+    process.execPath,
+    [...ARGS_NODE_SIN_DEPRECACIONES, SCRIPT, 'node', 'comando.mjs'],
+    {
+      cwd: dir,
+      env: herramientas.entorno(base, { aislado: true }),
+      encoding: 'utf8',
+      timeout: 120_000,
+    },
+  );
   return { status: r.status, salida: `${r.stdout}${r.stderr}`, llamadas: leerLlamadas(log) };
 }
 
@@ -143,9 +119,9 @@ describe('con-db-test', () => {
   before(() => {
     // Precondicion de seguridad: con el PATH aislado, `docker` TIENE que ser el falso. Si no lo
     // fuera, un test mal montado ejecutaria `docker rm -f` contra el Postgres de otra ejecucion.
-    const dir = carpetaTemporal('finapp-con-db-test-previo-');
+    const dir = temporales.crear('finapp-con-db-test-previo-');
     const log = join(dir, 'llamadas.jsonl');
-    const herramientas = instalarHerramientasFalsas(dir, ['docker', 'npm'], PROGRAMA);
+    const herramientas = instalarHerramientasFalsas(dir, ['docker'], PROGRAMA);
     const r = spawnSync('docker', ['info'], {
       env: herramientas.entorno({ ...ENTORNO_BASE, FALSA_LOG: log }, { aislado: true }),
     });
@@ -157,11 +133,7 @@ describe('con-db-test', () => {
     );
   });
 
-  after(() => {
-    while (temporales.length > 0) {
-      rmSync(temporales.pop(), { recursive: true, force: true, maxRetries: 5 });
-    }
-  });
+  after(() => temporales.borrarTodas());
 
   it('no da la base por lista hasta que el servidor definitivo acepta TCP', () => {
     const r = ejecutar({ puerto: 55434, fallosTcp: 2 });
@@ -215,5 +187,18 @@ describe('con-db-test', () => {
     );
     const comando = r.llamadas.find((l) => l.herramienta === 'comando');
     assert.match(comando.databaseUrl, /@127\.0\.0\.1:55433\/finapp_test$/);
+  });
+
+  it('migra con el npm de npm_execpath y ejecuta el comando aunque las rutas tengan espacios', () => {
+    const r = ejecutar({ puerto: 55434, prefijo: 'finapp con-db-test con espacios-' });
+
+    assert.equal(r.status, 0, r.salida);
+    assert.doesNotMatch(r.salida, /DEP0190/);
+    const npm = r.llamadas.find((l) => l.herramienta === 'npm');
+    assert.deepEqual(npm.args, ['run', 'migrate:up', '-w', '@finapp/api']);
+    assert.ok(
+      r.llamadas.some((l) => l.herramienta === 'comando'),
+      'no ejecuto el comando',
+    );
   });
 });
