@@ -1,0 +1,74 @@
+# Actualizaciones de dependencias. Los títulos de los PR (prefijo + "bump ...")
+# tienen que pasar la política de PR (.github/scripts/pr-policy.mjs, máximo 100 caracteres):
+# por eso el prefijo es un commit convencional y los grupos tienen nombres cortos
+# (npm, actions, docker). Las etiquetas deben existir en el repo
+# (se crean en .claude/skills/finapp-github/references/github-setup.md).
+#
+# Las major no entran en los grupos: cada una abre su propio PR para revisarla. Las que rompen
+# algo conocido se ignoran aquí y se suben a mano. Un test (.github/scripts/repo-config.test.mjs)
+# vigila las ignoradas, los nombres de los grupos y el título más largo posible.
+version: 2
+
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      timezone: 'Europe/Madrid'
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+    ignore:
+      # Los tipos de Node siguen la major del runtime (.nvmrc, imagen de Docker), que se
+      # decide a mano: una major de @types/node sin cambiar de Node describe una API que
+      # el runtime no tiene. Quitar al subir de Node.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # typescript-eslint declara typescript como peer con tope (<6.1.0 hoy): una major de
+      # typescript rompe el lint. Quitar cuando typescript-eslint soporte la siguiente.
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
+    commit-message:
+      prefix: 'chore(deps)'
+    labels: ['type:chore']
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      timezone: 'Europe/Madrid'
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+    commit-message:
+      prefix: 'ci(deps)'
+    labels: ['type:chore']
+
+  - package-ecosystem: 'docker'
+    directory: '/docker'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      timezone: 'Europe/Madrid'
+    open-pull-requests-limit: 5
+    groups:
+      docker:
+        patterns: ['*']
+        # `node` va aparte: subir su versión exige tocar también .nvmrc (el CI y los
+        # Dockerfiles usan la misma), y un PR que falla por eso no debe bloquear al resto.
+        exclude-patterns: ['node']
+        update-types: ['minor', 'patch']
+    ignore:
+      # La imagen `node` se queda en la línea 24 (LTS). Las impares (25, 27...) no son LTS y
+      # saltar a otra par es una decisión que afecta a .nvmrc, a `engines` y a @types/node.
+      - dependency-name: 'node'
+        update-types: ['version-update:semver-major']
+    commit-message:
+      prefix: 'build(deps)'
+    labels: ['type:chore']

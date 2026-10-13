@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Vulnerabilidad de seguridad
+    url: https://github.com/carellabs/finapp/security/advisories/new
+    about: Las vulnerabilidades se reportan en privado, nunca en una issue pública. Ver SECURITY.md.
