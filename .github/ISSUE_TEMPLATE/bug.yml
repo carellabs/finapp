@@ -1,0 +1,67 @@
+name: Error
+description: Informar de algo que falla o se calcula mal en FinApp
+title: 'fix: '
+labels: ['type:bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Los cambios de tipo `fix` necesitan una issue. El PR que lo corrija se titula como un
+        commit convencional (`fix(scope): descripción`) y cierra esta issue con `Closes #N`
+        en su cuerpo. Se arregla con un test de regresión primero: el test que reproduce el
+        fallo, y después el arreglo.
+
+        Este repositorio es público: no incluyas datos reales, dumps de la base de datos ni
+        capturas con cifras propias. Para reproducirlo bastan datos inventados.
+
+        Si es una vulnerabilidad de seguridad, no abras una issue: usa el reporte privado
+        (ver `SECURITY.md`).
+  - type: textarea
+    id: que-pasa
+    attributes:
+      label: Qué ocurre
+      description: Describe el fallo con precisión.
+    validations:
+      required: true
+  - type: textarea
+    id: pasos
+    attributes:
+      label: Pasos para reproducirlo
+      description: Con datos inventados. Si es un cálculo, los importes de entrada y el resultado que obtienes.
+      placeholder: |
+        1. Abre ...
+        2. Haz ...
+        3. Observa ...
+    validations:
+      required: true
+  - type: textarea
+    id: esperado
+    attributes:
+      label: Qué esperabas que ocurriera
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - Dominio y cálculos (shared)
+        - API
+        - Web
+        - Base de datos y migraciones
+        - Docker, CI o despliegue
+        - Otra
+    validations:
+      required: true
+  - type: input
+    id: entorno
+    attributes:
+      label: Entorno
+      description: Por ejemplo, Firefox 130 en Windows con `docker compose up`, o la rama y el commit.
+    validations:
+      required: true
+  - type: textarea
+    id: capturas
+    attributes:
+      label: Capturas o registros
+      description: Solo sin cifras propias ni datos personales (el repositorio es público). Opcional.

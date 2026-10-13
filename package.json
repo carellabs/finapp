@@ -26,7 +26,7 @@
     "prepare": "husky",
     "coverage": "npm run coverage --workspaces --if-present",
     "test:integration": "node scripts/con-db-test.mjs node scripts/suite-integracion.mjs",
-    "test:scripts": "node --test scripts/*.test.mjs"
+    "test:scripts": "node --test scripts/*.test.mjs .github/scripts/*.test.mjs"
   },
   "lint-staged": {
     "*.{ts,tsx}": [

@@ -16,6 +16,7 @@ Los skills de `.claude/skills/` son la memoria del proyecto. Cada uno declara su
 | Tests, cobertura, property-based, mutation testing                                | `.claude/skills/testing-strategy/SKILL.md`     |
 | Auth, sesiones, secretos, dependencias, Docker, despliegue                        | `.claude/skills/security-engineering/SKILL.md` |
 | Componentes, vistas, formato `es-ES`, Tailwind, accesibilidad                     | `.claude/skills/frontend-patterns/SKILL.md`    |
+| Ramas, commits, PR, issues, CI de GitHub                                          | `.claude/skills/finapp-github/SKILL.md`        |
 
 ## Reglas del repositorio
 
