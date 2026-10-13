@@ -1191,18 +1191,57 @@ describe('guía de configuración de GitHub (references/github-setup.md)', () =>
 describe('dependabot.yml', () => {
   const text = () => read('.github/dependabot.yml');
 
-  /** Hijos directos (clave: valor) de una clave de 4 espacios dentro de un bloque. */
-  const hijos = (block, clave) => {
+  /**
+   * Los grupos de un ecosistema, EN EL ORDEN del fichero: Dependabot asigna cada dependencia al
+   * PRIMER grupo que encaja (ver `asignar`). `patterns`, `exclude-patterns` y `update-types` se
+   * leen como listas en línea (`['a', 'b']`), aunque Prettier las parta en varias líneas.
+   * @param {string} block
+   * @returns {{ nombre: string, patterns: string[], excluir: string[], tipos: string[] }[]}
+   */
+  const grupos = (block) => {
     const lines = block.split('\n');
-    const i = lines.findIndex((l) => l === `    ${clave}:`);
+    const i = lines.findIndex((l) => l === '    groups:');
     if (i < 0) return [];
-    const out = [];
+    const cuerpo = [];
     for (const l of lines.slice(i + 1)) {
       if (/^ {0,4}\S/.test(l)) break;
-      const m = /^ {6}([A-Za-z0-9_-]+):\s*$/.exec(l);
-      if (m) out.push(m[1]);
+      cuerpo.push(l);
     }
-    return out;
+    const lista = (texto, clave) => {
+      const m = new RegExp(`^ {8}${clave}:\\s*\\[([^\\]]*)\\]`, 'm').exec(texto);
+      return m ? [...m[1].matchAll(new RegExp(`${Q}([^'"]+)${Q}`, 'g'))].map((x) => x[1]) : [];
+    };
+    return cuerpo
+      .join('\n')
+      .split(/\n(?= {6}[A-Za-z0-9_-]+:\s*\n)/)
+      .map((texto) => ({
+        nombre: /^\s*([A-Za-z0-9_-]+):\s*$/m.exec(texto)?.[1],
+        patterns: lista(texto, 'patterns'),
+        excluir: lista(texto, 'exclude-patterns'),
+        tipos: lista(texto, 'update-types'),
+      }))
+      .filter((g) => g.nombre);
+  };
+
+  /**
+   * Qué grupo recibe una actualización según las reglas documentadas de Dependabot: el primero
+   * (en orden de fichero) cuyo `patterns` encaja, cuyo `exclude-patterns` no la excluye y cuyo
+   * `update-types` la admite. `undefined`: ningún grupo, así que abre su propio PR.
+   * @param {{ nombre: string, patterns: string[], excluir: string[], tipos: string[] }[]} lista
+   * @param {string} dependencia
+   * @param {'major' | 'minor' | 'patch'} tipo
+   * @returns {string | undefined}
+   */
+  const asignar = (lista, dependencia, tipo) => {
+    const literal = (patron) => patron.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    const encaja = (patron) =>
+      new RegExp(`^${literal(patron).replace(/\*/g, '.*')}$`).test(dependencia);
+    return lista.find(
+      (g) =>
+        g.patterns.some(encaja) &&
+        !g.excluir.some(encaja) &&
+        (g.tipos.length === 0 || g.tipos.includes(tipo)),
+    )?.nombre;
   };
 
   /** Por ecosistema: nombre, directorio, prefijo del commit, etiquetas, grupos y majors ignoradas. */
@@ -1215,7 +1254,8 @@ describe('dependabot.yml', () => {
         directory: new RegExp(`^ {4}directory:\\s*${Q}([^'"]+)${Q}`, 'm').exec(block)?.[1],
         prefix: new RegExp(`prefix:\\s*${Q}([^'"]+)${Q}`).exec(block)?.[1],
         labels: new RegExp(`^ {4}labels:\\s*\\[${Q}([^'"\\]]+)${Q}\\]`, 'm').exec(block)?.[1],
-        groups: hijos(block, 'groups'),
+        grupos: grupos(block),
+        groups: grupos(block).map((g) => g.nombre),
         majorsIgnoradas: [
           ...block.matchAll(
             new RegExp(
@@ -1230,6 +1270,61 @@ describe('dependabot.yml', () => {
       }));
 
   const porNombre = (nombre) => ecosystems().find((e) => e.ecosystem === nombre);
+
+  /**
+   * Familias de npm que TIENEN que subir juntas, con sus patrones. Cada una es un grupo propio
+   * de `dependabot.yml`, y el orden de esta tabla es el del fichero (todas, antes del genérico).
+   * La evidencia de cada familia está en los peers del lockfile (ver el test «evidencia»).
+   */
+  const FAMILIAS = {
+    vitest: ['vitest', '@vitest/*'],
+    react: ['react', 'react-dom'],
+    'react-types': ['@types/react', '@types/react-dom'],
+    eslint: ['eslint', '@eslint/js'],
+  };
+
+  /** Dependencias directas de los cuatro package.json: `{ nombre -> manifiesto }`. */
+  const directas = () => {
+    const out = new Map();
+    for (const p of [
+      'package.json',
+      ...JSON.parse(read('package.json')).workspaces.map((w) => `${w}/package.json`),
+    ]) {
+      const pkg = JSON.parse(read(p));
+      for (const n of Object.keys({ ...pkg.dependencies, ...pkg.devDependencies })) out.set(n, p);
+    }
+    return out;
+  };
+
+  test('el lector de grupos respeta el orden del fichero y lee listas partidas en varias líneas (control positivo)', () => {
+    const yaml = [
+      '    groups:',
+      '      segundo:',
+      "        patterns: ['*']",
+      '        exclude-patterns: [\'a\', "b"]',
+      "        update-types: ['minor', 'patch']",
+      '      primero:',
+      '        patterns:',
+      '          [',
+      "            'x',",
+      "            '@y/*',",
+      '          ]',
+      "        update-types: ['major']",
+      '    ignore:',
+      '      - dependency-name: z',
+    ].join('\n');
+    assert.deepEqual(grupos(yaml), [
+      { nombre: 'segundo', patterns: ['*'], excluir: ['a', 'b'], tipos: ['minor', 'patch'] },
+      { nombre: 'primero', patterns: ['x', '@y/*'], excluir: [], tipos: ['major'] },
+    ]);
+    assert.deepEqual(grupos('    ignore:\n'), []);
+    // Y la asignación: gana el primero que encaja, y un tipo no admitido pasa al siguiente.
+    assert.equal(asignar(grupos(yaml), 'x', 'major'), 'primero');
+    assert.equal(asignar(grupos(yaml), 'x', 'minor'), 'segundo');
+    assert.equal(asignar(grupos(yaml), 'a', 'minor'), undefined, 'excluida del genérico');
+    assert.equal(asignar(grupos(yaml), '@y/z', 'major'), 'primero');
+    assert.equal(asignar(grupos(yaml), '@yy/z', 'major'), undefined, '`@y/*` no encaja con @yy/z');
+  });
 
   test('cubre npm (/), github-actions (/) y docker (/docker), con prefijo convencional y etiqueta type:chore', () => {
     const found = ecosystems();
@@ -1248,19 +1343,84 @@ describe('dependabot.yml', () => {
     }
   });
 
-  test('los grupos tienen nombres cortos (npm, actions, docker): los largos superaban los 100 caracteres de pr-policy', () => {
-    assert.deepEqual(porNombre('npm').groups, ['npm']);
+  test('los grupos tienen nombres cortos (npm, actions, docker y las familias): los largos superaban los 100 caracteres de pr-policy', () => {
+    assert.deepEqual(porNombre('npm').groups, [...Object.keys(FAMILIAS), 'npm']);
     assert.deepEqual(porNombre('github-actions').groups, ['actions']);
     assert.deepEqual(porNombre('docker').groups, ['docker']);
   });
 
-  test('las majors no llegan agrupadas: cada una abre su propio PR para revisarla', () => {
+  test('las majors sueltas no llegan agrupadas: el grupo genérico de cada ecosistema es solo minor y patch', () => {
     for (const e of ecosystems()) {
-      assert.match(
-        e.block,
-        new RegExp(`update-types:\\s*\\[${Q}minor${Q},\\s*${Q}patch${Q}\\]`),
-        e.ecosystem,
+      const generico = e.grupos.at(-1);
+      assert.equal(generico.nombre, e.ecosystem === 'github-actions' ? 'actions' : e.ecosystem);
+      assert.deepEqual(generico.tipos, ['minor', 'patch'], `${e.ecosystem}: grupo genérico`);
+    }
+  });
+
+  test('cada familia de npm que sube junta tiene su grupo propio, que admite también las majors', () => {
+    const { grupos: npm } = porNombre('npm');
+    for (const [nombre, patrones] of Object.entries(FAMILIAS)) {
+      const grupo = npm.find((g) => g.nombre === nombre);
+      assert.ok(grupo, `npm: falta el grupo «${nombre}»`);
+      assert.deepEqual(grupo.patterns, patrones, `${nombre}: patrones`);
+      assert.deepEqual(grupo.excluir, [], `${nombre}: sin exclusiones`);
+      // Sin esto, la major de un miembro abriría su PR suelto y rompería los peers de los demás.
+      assert.deepEqual([...grupo.tipos].sort(), ['major', 'minor', 'patch'], `${nombre}: tipos`);
+    }
+  });
+
+  test('los grupos de familia van ANTES del genérico npm: Dependabot asigna cada dependencia al primer grupo que encaja', () => {
+    // Documentación de GitHub (data/reusables/dependabot/dependabot-version-updates-groups-match-first.md,
+    // y «groups» en dependabot-options-reference.md): «Dependabot creates groups in the order they
+    // appear in your dependabot.yml file. If a dependency update could belong to more than one
+    // group, it is only assigned to the first group it matches with.»
+    // `vitest` encaja en el genérico (patterns: ['*']) para minor y patch: si el genérico fuera
+    // antes, esas subidas se irían a él y la familia se separaría.
+    const nombres = porNombre('npm').groups;
+    const iGenerico = nombres.indexOf('npm');
+    assert.equal(iGenerico, nombres.length - 1, 'el genérico npm debe ser el último');
+    for (const familia of Object.keys(FAMILIAS)) {
+      const i = nombres.indexOf(familia);
+      assert.ok(i >= 0 && i < iGenerico, `${familia} (posición ${i}) debe ir antes de npm`);
+    }
+  });
+
+  test('cada dependencia de npm cae en su familia en minor, patch y major; las demás, en npm o en su propio PR', () => {
+    const { grupos: npm } = porNombre('npm');
+    const enFamilia = new Map();
+    for (const [familia, patrones] of Object.entries(FAMILIAS)) {
+      for (const dep of directas().keys()) {
+        if (patrones.some((p) => (p.endsWith('*') ? dep.startsWith(p.slice(0, -1)) : dep === p))) {
+          enFamilia.set(dep, familia);
+        }
+      }
+    }
+    // Control positivo: las familias existen de verdad en los manifiestos.
+    assert.ok(enFamilia.size >= 8, `solo ${enFamilia.size} dependencias en familias`);
+    for (const dep of directas().keys()) {
+      const familia = enFamilia.get(dep);
+      for (const tipo of ['minor', 'patch']) {
+        assert.equal(asignar(npm, dep, tipo), familia ?? 'npm', `${dep} (${tipo})`);
+      }
+      assert.equal(asignar(npm, dep, 'major'), familia, `${dep} (major)`);
+    }
+  });
+
+  test('evidencia: en el lockfile, algún miembro de cada familia declara a otro como peer', () => {
+    // Sin ese acoplamiento no hay motivo para el grupo; con él, separar la major de un miembro
+    // produce un ERESOLVE (el caso real: @vitest/coverage-v8 4.1.11 pide vitest 4.1.11 exacto).
+    const lock = JSON.parse(read('package-lock.json')).packages;
+    const encaja = (patron, nombre) =>
+      patron.endsWith('*') ? nombre.startsWith(patron.slice(0, -1)) : nombre === patron;
+    for (const [familia, patrones] of Object.entries(FAMILIAS)) {
+      const miembros = [...directas().keys()].filter((d) => patrones.some((p) => encaja(p, d)));
+      assert.ok(miembros.length >= 2, `${familia}: solo ${miembros.length} miembro(s) directo(s)`);
+      const peers = miembros.flatMap((m) =>
+        Object.keys(lock[`node_modules/${m}`]?.peerDependencies ?? {})
+          .filter((p) => p !== m && miembros.includes(p))
+          .map((p) => `${m} -> ${p}`),
       );
+      assert.ok(peers.length >= 1, `${familia}: ningún miembro es peer de otro (${miembros})`);
     }
   });
 
@@ -1341,6 +1501,31 @@ describe('dependabot.yml', () => {
         assert.ok(evaluatePr({ title, body: '' }).ok, `${title.length} caracteres: ${title}`);
       }
     }
+  });
+
+  test('los títulos de los grupos de familia, en el peor caso, también pasan la política de PR (100 caracteres)', () => {
+    const npm = porNombre('npm');
+    const masLargo = [...directas().keys()].reduce((a, b) => (b.length > a.length ? b : a), '');
+    const titulosDe = (grupo) => [
+      // Una sola actualización en el grupo, con el nombre más largo de todo el repositorio.
+      `${npm.prefix}: bump ${masLargo} from 10.10.10 to 10.10.11 in the ${grupo} group`,
+      // Varias (más de 99): «bump the <grupo> group with N updates».
+      `${npm.prefix}: bump the ${grupo} group with 100 updates`,
+    ];
+    let mayor = 0;
+    for (const familia of Object.keys(FAMILIAS)) {
+      assert.ok(npm.groups.includes(familia), `npm: falta el grupo «${familia}»`);
+      for (const title of titulosDe(familia)) {
+        mayor = Math.max(mayor, Array.from(title).length);
+        assert.ok(Array.from(title).length <= 100, `${title.length} caracteres: ${title}`);
+        assert.ok(evaluatePr({ title, body: '' }).ok, `${title.length} caracteres: ${title}`);
+      }
+    }
+    // Control positivo: el cálculo es exigente (llega cerca del límite) y un nombre de grupo
+    // largo SÍ lo supera, así que el test se pondría rojo.
+    assert.ok(mayor >= 80, `el peor caso solo mide ${mayor} caracteres`);
+    const largo = titulosDe('un-nombre-de-grupo-demasiado-largo-para-el-titulo')[0];
+    assert.equal(evaluatePr({ title: largo, body: '' }).ok, false, largo);
   });
 
   test('el cálculo del peor caso ve los nombres más largos de los cuatro package.json (control positivo)', () => {
