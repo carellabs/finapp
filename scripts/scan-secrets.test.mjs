@@ -36,6 +36,9 @@ const MENSAJE = {
   fallaGitleaks: /FALLO: gitleaks fallo/,
   erroresEnSalida: /FALLO: gitleaks informo de errores/,
   noEsRepo: /FALLO: git no puede leer el repositorio/,
+  headIlegible: /FALLO: HEAD no se puede leer/,
+  sinCommits: /sin commits todavia: se omite el escaneo del historico/,
+  limpio: /OK: ningun secreto detectado/,
 };
 
 // Salida de gitleaks (zerolog) tal como la emite: hora, nivel de 3 letras y mensaje. Con
@@ -104,6 +107,40 @@ function crearRepo(prefijo = 'finapp-secretos-') {
 const escribir = (dir, nombre, contenido) => writeFileSync(join(dir, nombre), contenido);
 const preparar = (dir, ...rutas) => git(dir, 'add', ...rutas);
 const commit = (dir, mensaje) => git(dir, 'commit', '-q', '--no-verify', '-m', mensaje);
+
+const HASH_INEXISTENTE = '0123456789abcdef0123456789abcdef01234567';
+
+// Formas reales de dejar HEAD ilegible en un repo que ya tiene commits (la rama es `main`).
+// El `.git/HEAD` con basura no esta: ahi git ni reconoce el repo y el escaneo ya sale 2.
+const ROTURAS_DE_HEAD = [
+  ['la rama de HEAD con basura', (dir) => escribir(dir, '.git/refs/heads/main', 'no es un hash\n')],
+  ['la rama de HEAD vacia', (dir) => escribir(dir, '.git/refs/heads/main', '')],
+  [
+    'la rama de HEAD apunta a un objeto que no existe',
+    (dir) => escribir(dir, '.git/refs/heads/main', `${HASH_INEXISTENTE}\n`),
+  ],
+  [
+    'HEAD desacoplado a un objeto que no existe',
+    (dir) => escribir(dir, '.git/HEAD', `${HASH_INEXISTENTE}\n`),
+  ],
+];
+
+/** Repo con un commit limpio y HEAD roto por `romper`, pero que git sigue reconociendo. */
+function repoConHeadRoto(romper) {
+  const dir = crearRepo();
+  escribir(dir, 'README.md', '# Proyecto limpio\n');
+  preparar(dir, 'README.md');
+  commit(dir, 'inicial');
+  romper(dir);
+  // Precondicion: es un repo para git, y HEAD ya no lleva a un commit.
+  git(dir, 'rev-parse', '--git-dir');
+  const head = spawnSync('git', ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], {
+    cwd: dir,
+    env: ENTORNO_BASE,
+  });
+  assert.notEqual(head.status, 0, 'precondicion: HEAD tiene que estar roto');
+  return dir;
+}
 
 /**
  * Ejecuta scan-secrets.mjs con `dir` como cwd. `salida` junta stdout y stderr. Con
@@ -321,6 +358,43 @@ describe('scan-secrets', () => {
       assert.match(r.salida, MENSAJE.noEsRepo);
       assert.doesNotMatch(r.salida, MENSAJE.cualquierHallazgo);
     });
+
+    it('una rama sin nacer con un fichero limpio preparado sale 0 y avisa de que omite el historico', () => {
+      const dir = crearRepo();
+      escribir(dir, 'README.md', '# Proyecto limpio\n');
+      preparar(dir, 'README.md');
+
+      const r = ejecutar(dir);
+
+      assert.equal(r.status, 0, r.salida);
+      assert.match(r.salida, MENSAJE.sinCommits);
+      assert.match(r.salida, MENSAJE.limpio);
+    });
+
+    it('con HEAD ilegible y un secreto en el historico sale 2: no lo da por "sin commits" ni por limpio', () => {
+      const dir = crearRepo();
+      escribir(dir, 'config.txt', `token = ${secretoFalso()}\n`);
+      preparar(dir, 'config.txt');
+      commit(dir, 'anade config con secreto');
+      git(dir, 'rm', '-q', 'config.txt');
+      commit(dir, 'quita config');
+
+      // Control positivo: con HEAD sano, el secreto del historico se detecta. Sin esto, el 2 de
+      // abajo podria ser un motor que no ve ese secreto.
+      const sano = ejecutar(dir);
+      assert.equal(sano.status, 1, sano.salida);
+      assert.match(sano.salida, MENSAJE.historico);
+
+      // HEAD apunta a una referencia rota: antes se tomaba por "sin commits", se saltaba el
+      // historico y el escaneo terminaba en OK con el secreto dentro.
+      escribir(dir, '.git/refs/heads/main', 'no es un hash\n');
+      const roto = ejecutar(dir);
+
+      assert.equal(roto.status, 2, roto.salida);
+      assert.match(roto.salida, MENSAJE.headIlegible);
+      assert.doesNotMatch(roto.salida, MENSAJE.sinCommits);
+      assert.doesNotMatch(roto.salida, MENSAJE.limpio);
+    });
   });
 
   describe('motor simulado', () => {
@@ -537,6 +611,36 @@ describe('scan-secrets', () => {
       assert.equal(r.status, 0, r.salida);
       assert.doesNotMatch(r.salida, /FALLO/);
     });
+
+    it('una rama sin nacer NO es un error: escanea lo preparado, omite el historico y sale 0', () => {
+      const dir = crearRepo();
+      escribir(dir, 'README.md', '# Proyecto limpio\n');
+      preparar(dir, 'README.md');
+      const shims = crearShims();
+
+      const r = ejecutar(dir, entornoConShims(shims, { disponibles: ['gitleaks'] }));
+
+      assert.equal(r.status, 0, r.salida);
+      assert.match(r.salida, MENSAJE.sinCommits);
+      assert.match(r.salida, MENSAJE.limpio);
+      assert.equal(llamadas(shims).length, 1, 'solo lo preparado: el historico se omite');
+    });
+
+    for (const [caso, romper] of ROTURAS_DE_HEAD) {
+      it(`HEAD ilegible (${caso}): sale 2 sin escanear, no lo toma por "sin commits"`, () => {
+        const dir = repoConHeadRoto(romper);
+        const shims = crearShims();
+
+        const r = ejecutar(dir, entornoConShims(shims, { disponibles: ['gitleaks'] }));
+
+        assert.equal(r.status, 2, r.salida);
+        assert.match(r.salida, MENSAJE.headIlegible);
+        assert.doesNotMatch(r.salida, MENSAJE.sinCommits);
+        assert.doesNotMatch(r.salida, MENSAJE.limpio);
+        assert.doesNotMatch(r.salida, MENSAJE.cualquierHallazgo);
+        assert.deepEqual(llamadas(shims), [], 'con HEAD ilegible ningun escaneo es fiable');
+      });
+    }
 
     it('en una carpeta que no es un repo git sale 2 sin llamar a gitleaks', () => {
       const { dir, techoGit } = carpetaSinRepo();
