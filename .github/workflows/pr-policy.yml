@@ -12,7 +12,8 @@ name: PR policy
 # - Evento `pull_request` (no `pull_request_target`): el código del PR nunca se
 #   ejecuta con un token de escritura de un fork.
 # - Título y cuerpo del PR son entrada no fiable: solo entran por `env:`,
-#   nunca se interpolan dentro de `run:`.
+#   nunca se interpolan dentro de `run:`. El autor (login y tipo) también: el script
+#   exime a Dependabot del límite de longitud del título, y para eso exige las dos cosas.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -53,6 +54,8 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
         run: node .github/scripts/pr-policy.mjs
 
   label:

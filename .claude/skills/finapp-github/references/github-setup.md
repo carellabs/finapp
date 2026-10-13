@@ -250,6 +250,8 @@ En el job `seguridad` no hay nada «preparado» (`git add`): el checkout deja el
 
 Comprobado el 13-oct-2026 con clones locales (sin tocar el repositorio): un commit mete un secreto de prueba y el siguiente lo borra. En un clon completo, el paso de «preparados» informa `0 commits scanned` y el del histórico encuentra el secreto (`leaks found: 1`, salida 1). En un clon con `--depth 1`, el valor por defecto de `actions/checkout`, el mismo secreto pasa sin verse (`1 commits scanned`, salida 0).
 
+**La imagen de gitleaks no la sigue Dependabot.** Su versión y su digest viven en `scripts/scan-secrets.mjs` (una constante, no un manifiesto que Dependabot lea): se sube a mano, como dice el comentario junto a `IMAGEN`.
+
 ## Verificado
 
 Comprobado el 13-oct-2026 con `gh api` de solo lectura sobre el repositorio real, y con los scripts y tests locales:
@@ -275,7 +277,7 @@ Lo que queda de verdad pendiente:
 
 - **Los cinco checks en un runner real**: ningún workflow se ha ejecutado todavía en GitHub. En particular `integracion` (Postgres efímero con Docker en el puerto 55433), `seguridad` (gitleaks vía Docker contra un checkout propiedad de otro usuario, con `safe.directory` por entorno; y `npm audit` sin `npm ci`, leyendo solo el lockfile), `imagenes` (los dos `docker build` del target `production`) y `test` (que incluye los tests del gate de secretos, que usan Docker). Los tiempos máximos (`timeout-minutes`) son estimaciones.
 - **Los nombres de los checks en el ruleset**: se confirman cuando aparezcan en el primer PR (apartado 3.2). Hasta entonces, el ruleset real no los exige.
-- **Dependabot**: que acepta `exclude-patterns` en el grupo de `docker`, que lee `api.Dockerfile` y `web.Dockerfile` (no se llaman `Dockerfile`) y que los títulos de sus PR caben en los 100 caracteres de la política. El test fija el peor caso que se puede calcular, no el título real.
+- **Dependabot**: que acepta `exclude-patterns` en el grupo de `docker`, que lee `api.Dockerfile` y `web.Dockerfile` (no se llaman `Dockerfile`) y que los títulos de sus PR de una sola actualización tienen el formato que deduce el test del código de Dependabot (el de varias, `bump the G group across 1 directory with N updates`, sí se vio en el PR #9). Dependabot está exento del límite de 100 caracteres (`pr-policy.mjs` exige el login `dependabot[bot]` Y el tipo `Bot`), no del formato convencional.
 - **Salida de etiqueta entre jobs cuando `pr-policy` falla**: el código del runner evalúa las `outputs` del job al terminar, falle o no un paso, y la documentación solo dice que se evalúan "al final de cada job". Que el job `label` las reciba con el job anterior en rojo se confirma con el PR `feat:` sin issue del apartado "Primer PR de prueba". Si no llegara, el efecto sería solo que ese PR no se etiqueta.
 - **CodeQL con PR de Dependabot y de forks**: falta ver cómo se comporta (su token es de solo lectura, así que subir resultados puede no estar permitido; al no ser obligatorio, no bloquea la fusión).
 - **Los workflows programados** (`audit.yml`, `codeql.yml`): GitHub desactiva los de un repositorio público tras 60 días sin actividad; si deja de llegar el aviso, actívalos de nuevo desde la pestaña *Actions*.

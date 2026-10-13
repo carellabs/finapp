@@ -8,6 +8,12 @@
 // Seguridad: el título y el cuerpo son datos NO fiables (los escribe quien abre
 // el PR). Por eso nunca se vuelcan a la salida ni a $GITHUB_OUTPUT: la etiqueta
 // que se escribe sale siempre de la tabla LABELS, jamás del texto del usuario.
+//
+// Autor: los PR de Dependabot están exentos del límite de longitud del título (lo escribe
+// Dependabot y, con un nombre largo, "bump X from A to B in the G group across 1 directory"
+// pasa de 100 caracteres). La exención exige login Y tipo (ver `isDependabot`), llegados por
+// PR_AUTHOR_LOGIN y PR_AUTHOR_TYPE, y alcanza SOLO a la longitud: el formato convencional, la
+// issue de feat y fix y la etiqueta se exigen igual.
 
 import { appendFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -29,6 +35,26 @@ const TYPES = [
 
 /** Longitud máxima del título del PR, en caracteres. */
 const TITLE_MAX_LENGTH = 100;
+
+/** Cómo identifica GitHub al autor de los PR de Dependabot (`pull_request.user`). */
+const DEPENDABOT_LOGIN = 'dependabot[bot]';
+const DEPENDABOT_TYPE = 'Bot';
+
+/**
+ * ¿Es Dependabot el autor del PR? Exige el login Y el tipo `Bot`, y compara exacto (sin
+ * mayúsculas ni espacios): un login igual con tipo `User`, u otro bot, no cuenta. Cualquier
+ * cosa que no sea el par de textos esperado (ausente, lista, número...) es que no.
+ * @param {{ login?: unknown, type?: unknown } | null | undefined} [author]
+ * @returns {boolean}
+ */
+export function isDependabot(author) {
+  return (
+    typeof author === 'object' &&
+    author !== null &&
+    author.login === DEPENDABOT_LOGIN &&
+    author.type === DEPENDABOT_TYPE
+  );
+}
 
 /**
  * Formato del título: tipo(scope opcional)!opcional: descripción.
@@ -111,12 +137,13 @@ const MSG_ISSUE_REQUIRED =
 /**
  * Evalúa título y cuerpo de un PR contra la política del repositorio.
  *
- * @param {{ title?: string | null, body?: string | null }} [pr]
+ * @param {{ title?: string | null, body?: string | null, author?: { login?: unknown, type?: unknown } | null }} [pr]
+ *   `author` (opcional) es el autor del PR; solo Dependabot queda exento de la longitud.
  * @returns {{ ok: boolean, errors: string[], label: string | null }}
  *   `label` es la etiqueta `type:*` derivada del título, o `null` si el título
  *   no es válido. Se calcula aunque `ok` sea false por falta de issue.
  */
-export function evaluatePr({ title, body } = {}) {
+export function evaluatePr({ title, body, author } = {}) {
   if (typeof title !== 'string' || title === '') {
     return { ok: false, errors: [MSG_TITLE_MISSING], label: null };
   }
@@ -126,8 +153,8 @@ export function evaluatePr({ title, body } = {}) {
     return { ok: false, errors: [MSG_TITLE_FORMAT], label: null };
   }
 
-  // Caracteres, no unidades UTF-16: un emoji cuenta como uno.
-  if (Array.from(title).length > TITLE_MAX_LENGTH) {
+  // Caracteres, no unidades UTF-16: un emoji cuenta como uno. Dependabot no tiene tope.
+  if (!isDependabot(author) && Array.from(title).length > TITLE_MAX_LENGTH) {
     return { ok: false, errors: [MSG_TITLE_LENGTH], label: null };
   }
 
@@ -154,6 +181,7 @@ function main(env) {
   const { ok, errors, label } = evaluatePr({
     title: env.PR_TITLE,
     body: env.PR_BODY,
+    author: { login: env.PR_AUTHOR_LOGIN, type: env.PR_AUTHOR_TYPE },
   });
 
   if (label && env.GITHUB_OUTPUT) {

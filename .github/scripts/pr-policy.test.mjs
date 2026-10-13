@@ -176,6 +176,120 @@ describe('evaluatePr: longitud del titulo', () => {
   });
 });
 
+describe('evaluatePr: exencion de longitud para Dependabot (login Y tipo Bot)', () => {
+  const DEPENDABOT = { login: 'dependabot[bot]', type: 'Bot' };
+  // Un titulo real de grupo con una sola actualizacion: 105 caracteres.
+  const LARGO =
+    'chore(deps): bump @testing-library/jest-dom from 10.10.10 to 10.10.11 in the npm group across 1 directory';
+
+  test('el titulo de ejemplo mide mas de 100 caracteres y una persona NO lo puede usar', () => {
+    assert.equal(LARGO.length, 105);
+    for (const author of [undefined, { login: 'carellabs', type: 'User' }]) {
+      const r = evaluatePr({ title: LARGO, body: '', author });
+      assert.equal(r.ok, false, JSON.stringify(author));
+      assert.equal(r.label, null);
+      assert.match(r.errors[0], /100/);
+    }
+  });
+
+  test('Dependabot (login y tipo Bot) con 105 caracteres pasa, con su etiqueta', () => {
+    const r = evaluatePr({ title: LARGO, body: '', author: DEPENDABOT });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(r.errors, []);
+    assert.equal(r.label, 'type:chore');
+  });
+
+  test('la exencion quita el tope de 100: 150 caracteres pasan', () => {
+    const largo = 'build(deps): ' + 'a'.repeat(150 - 'build(deps): '.length);
+    assert.equal(largo.length, 150);
+    assert.equal(evaluatePr({ title: largo, body: '', author: DEPENDABOT }).ok, true);
+  });
+
+  test('el login dependabot[bot] con tipo User NO se exime (suplantacion)', () => {
+    const r = evaluatePr({
+      title: LARGO,
+      body: '',
+      author: { login: 'dependabot[bot]', type: 'User' },
+    });
+    assert.equal(r.ok, false);
+    assert.match(r.errors[0], /100/);
+  });
+
+  test('otro bot, o el tipo Bot con otro login, NO se exime: es solo Dependabot', () => {
+    for (const author of [
+      { login: 'renovate[bot]', type: 'Bot' },
+      { login: 'github-actions[bot]', type: 'Bot' },
+      { login: 'carellabs', type: 'Bot' },
+      { login: 'dependabot', type: 'Bot' },
+    ]) {
+      assert.equal(
+        evaluatePr({ title: LARGO, body: '', author }).ok,
+        false,
+        JSON.stringify(author),
+      );
+    }
+  });
+
+  test('la comparacion es exacta: ni mayusculas, ni espacios, ni datos que no son texto', () => {
+    for (const author of [
+      { login: 'Dependabot[bot]', type: 'Bot' },
+      { login: 'dependabot[bot]', type: 'bot' },
+      { login: 'dependabot[bot]', type: 'BOT' },
+      { login: ' dependabot[bot]', type: 'Bot' },
+      { login: 'dependabot[bot]', type: 'Bot ' },
+      { login: 'dependabot[bot]' },
+      { type: 'Bot' },
+      { login: ['dependabot[bot]'], type: 'Bot' },
+      { login: 'dependabot[bot]', type: ['Bot'] },
+      {},
+      null,
+      'dependabot[bot]',
+    ]) {
+      assert.equal(
+        evaluatePr({ title: LARGO, body: '', author }).ok,
+        false,
+        JSON.stringify(author),
+      );
+    }
+  });
+
+  test('Dependabot con un titulo que no es un commit convencional falla igual', () => {
+    for (const title of [
+      'Bump foo from 1.0.0 to 1.0.1',
+      'Chore(deps): bump foo from 1.0.0 to 1.0.1',
+      'chore(deps):bump foo from 1.0.0 to 1.0.1',
+      'bump(deps): bump foo from 1.0.0 to 1.0.1',
+      'chore(deps): ',
+      'chore(deps): ' + '\u200B' + 'foo',
+      '',
+    ]) {
+      const r = evaluatePr({ title, body: '', author: DEPENDABOT });
+      assert.equal(r.ok, false, JSON.stringify(title));
+      assert.equal(r.label, null);
+    }
+    // Y un titulo malo Y largo informa del formato, no de la longitud.
+    const r = evaluatePr({ title: 'Bump ' + 'a'.repeat(200), body: '', author: DEPENDABOT });
+    assert.match(r.errors[0], /commit convencional/i);
+  });
+
+  test('el resto de la politica no cambia para Dependabot: sigue la issue de feat y fix', () => {
+    for (const title of ['feat: algo', 'fix: algo']) {
+      const sin = evaluatePr({ title, body: '', author: DEPENDABOT });
+      assert.equal(sin.ok, false, title);
+      assert.match(sin.errors[0], /issue/i);
+      assert.equal(evaluatePr({ title, body: WITH_ISSUE, author: DEPENDABOT }).ok, true, title);
+    }
+  });
+
+  test('el autor no altera el resultado de un titulo normal ni la etiqueta', () => {
+    const base = { title: 'chore(deps)!: sube a una mayor', body: '' };
+    const sinAutor = evaluatePr(base);
+    assert.deepEqual(evaluatePr({ ...base, author: DEPENDABOT }), sinAutor);
+    assert.deepEqual(evaluatePr({ ...base, author: { login: 'x', type: 'User' } }), sinAutor);
+    assert.equal(sinAutor.label, 'type:breaking-change');
+  });
+});
+
 describe('evaluatePr: referencia de cierre en feat y fix', () => {
   const conReferencia = [
     'Closes #12',
@@ -416,7 +530,14 @@ describe('CLI', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pr-policy-'));
     const output = join(dir, 'github_output');
     const env = { ...process.env };
-    for (const k of ['PR_TITLE', 'PR_BODY', 'GITHUB_OUTPUT', 'GITHUB_ACTIONS']) {
+    for (const k of [
+      'PR_TITLE',
+      'PR_BODY',
+      'PR_AUTHOR_LOGIN',
+      'PR_AUTHOR_TYPE',
+      'GITHUB_OUTPUT',
+      'GITHUB_ACTIONS',
+    ]) {
       delete env[k];
     }
     const conOutput = !('noOutput' in overrides);
@@ -492,6 +613,54 @@ describe('CLI', () => {
     assert.equal(ok.status, 0, ok.stderr);
     const ko = ejecutar({ PR_TITLE: 'fix: algo' });
     assert.equal(ko.status, 1);
+  });
+
+  describe('autor del PR (PR_AUTHOR_LOGIN y PR_AUTHOR_TYPE)', () => {
+    const LARGO =
+      'chore(deps): bump @testing-library/jest-dom from 10.10.10 to 10.10.11 in the npm group across 1 directory';
+
+    test('Dependabot (login y tipo Bot): un titulo de 105 caracteres pasa, con su etiqueta', () => {
+      const r = ejecutar({
+        PR_TITLE: LARGO,
+        PR_BODY: '',
+        PR_AUTHOR_LOGIN: 'dependabot[bot]',
+        PR_AUTHOR_TYPE: 'Bot',
+      });
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.salida, 'label=type:chore\n');
+    });
+
+    test('una persona con el mismo titulo falla por la longitud, y sin autor tambien', () => {
+      for (const autor of [{ PR_AUTHOR_LOGIN: 'carellabs', PR_AUTHOR_TYPE: 'User' }, {}]) {
+        const r = ejecutar({ PR_TITLE: LARGO, PR_BODY: '', ...autor });
+        assert.equal(r.status, 1, JSON.stringify(autor));
+        assert.match(r.stderr, /100/);
+        assert.ok(r.salida === null || !/label=/.test(r.salida));
+      }
+    });
+
+    test('suplantacion: dependabot[bot] con tipo User, o el tipo Bot con otro login, fallan', () => {
+      for (const autor of [
+        { PR_AUTHOR_LOGIN: 'dependabot[bot]', PR_AUTHOR_TYPE: 'User' },
+        { PR_AUTHOR_LOGIN: 'dependabot[bot]' },
+        { PR_AUTHOR_TYPE: 'Bot' },
+        { PR_AUTHOR_LOGIN: 'renovate[bot]', PR_AUTHOR_TYPE: 'Bot' },
+      ]) {
+        const r = ejecutar({ PR_TITLE: LARGO, PR_BODY: '', ...autor });
+        assert.equal(r.status, 1, JSON.stringify(autor));
+      }
+    });
+
+    test('Dependabot con un titulo que no es convencional: exit 1', () => {
+      const r = ejecutar({
+        PR_TITLE: 'Bump foo from 1.0.0 to 1.0.1',
+        PR_BODY: '',
+        PR_AUTHOR_LOGIN: 'dependabot[bot]',
+        PR_AUTHOR_TYPE: 'Bot',
+      });
+      assert.equal(r.status, 1);
+      assert.match(r.stderr, /t[ií]tulo/i);
+    });
   });
 
   test('GITHUB_ACTIONS=true emite anotaciones ::error; fuera de Actions, texto plano', () => {
