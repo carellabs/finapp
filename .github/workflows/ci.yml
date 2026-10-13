@@ -1,0 +1,123 @@
+name: CI
+
+# Los gates de `npm run ci` (scripts/ci.mjs) repartidos en cuatro jobs que corren en paralelo.
+# Cada job es un check OBLIGATORIO de `main`: el ruleset
+# (.claude/skills/finapp-github/assets/ruleset-main.json) los busca por el `name` de cada job,
+# así que no lo cambies sin cambiar el ruleset. Un test (.github/scripts/repo-config.test.mjs)
+# vigila que ambos coincidan y que cada paso de scripts/ci.mjs corra aquí.
+#
+# Seguridad: evento `pull_request` (nunca `pull_request_target`), permisos de solo lectura y
+# checkout sin persistir credenciales.
+#
+# `pull_request` SIN filtro de ramas: un PR encadenado (con base en otra rama) también pasa el
+# CI, y cuando GitHub lo reorienta a `main` al fusionar el padre, sus checks ya existen en vez
+# de quedarse en «Expected» (el cambio de base dispara `edited`, que este workflow no escucha).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# En un PR, un push nuevo a la misma rama cancela la ejecución anterior.
+# En `main` cada commit tiene su propio grupo (por SHA): con un grupo compartido
+# GitHub cancela igualmente la ejecución *pendiente* aunque `cancel-in-progress`
+# sea false, y tres fusiones seguidas dejarían el commit intermedio sin CI.
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # lint, formato, tipos, tests con cobertura (umbrales: 90 % shared, 80 % api), tests de los
+  # scripts de gates y de la configuración de GitHub, y build.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Formato
+        run: npm run format
+      - name: Tipos
+        run: npm run typecheck
+      - name: Tests con cobertura
+        run: npm run coverage
+      - name: Tests de los scripts
+        run: npm run test:scripts
+      - name: Build
+        run: npm run build
+
+  # Postgres real y efímero (Docker): migraciones up/down/up, EXPLAIN y constraints. Es el mismo
+  # script que en local; los runners `ubuntu-latest` traen Docker.
+  integracion:
+    name: integracion
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Tests de integración
+        run: npm run test:integration
+
+  # Este job no instala dependencias (`npm audit` lee el lockfile y `scan:secrets` solo usa
+  # Node y Docker), así que no usa la caché de npm: la caché se guarda una sola vez por clave,
+  # y una caché vacía guardada por este job dejaría sin caché a `test` e `integracion`.
+  seguridad:
+    name: seguridad
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Historial completo: `scan:secrets` escanea todos los commits (ver scripts/scan-secrets.mjs).
+          # En un checkout limpio no hay nada «preparado» (el índice es igual a HEAD): el escaneo
+          # que de verdad trabaja en CI es el del histórico, y con un clon superficial no lo vería.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      # Solo dependencias de producción: lo que llega al servidor. Las de desarrollo (y el
+      # `audit:deps` local, que lo audita todo) se vigilan en .github/workflows/audit.yml cada
+      # semana: una alerta nueva en una herramienta de desarrollo no debe bloquear la fusión
+      # de un PR que no tiene nada que ver.
+      - name: Auditoría de dependencias de producción
+        run: npm audit --omit=dev --audit-level=high
+      - name: Escaneo de secretos
+        run: npm run scan:secrets
+
+  # El target `production` de los dos Dockerfiles: ningún otro gate lo construye y un `COPY` sin
+  # `--chown` o un `npm ci` con scripts rompía el despliegue sin que nadie lo viera.
+  imagenes:
+    name: imagenes
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - name: Construir las imágenes de producción
+        run: npm run build:imagenes
