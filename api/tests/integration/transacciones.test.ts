@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { agenteDesdeElFrontend, desdeElFrontend, ORIGEN_FRONTEND_PRUEBAS } from '../soporte/origen';
 import type { Express } from 'express';
 import { crearApp } from '../../src/app';
 import { cargarEnv } from '../../src/config/env';
@@ -15,7 +16,7 @@ const ENV = cargarEnv({
   NODE_ENV: 'test',
   PORT: '3000',
   DATABASE_URL: urlBd,
-  ORIGEN_FRONTEND: 'http://localhost:5173',
+  ORIGEN_FRONTEND: ORIGEN_FRONTEND_PRUEBAS,
 });
 
 let pool: Pool;
@@ -73,7 +74,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await pool.query('TRUNCATE transacciones RESTART IDENTITY CASCADE');
-  agente = request.agent(app);
+  agente = agenteDesdeElFrontend(app);
   await iniciarSesion();
 });
 
@@ -93,7 +94,7 @@ function gastoValido(overrides: Record<string, unknown> = {}): Record<string, un
 
 describe('sin sesión: 401 en todo el recurso, nunca datos (§8.3)', () => {
   it('POST sin sesión', async () => {
-    const respuesta = await request(app).post('/api/v1/transacciones').send(gastoValido());
+    const respuesta = await desdeElFrontend(app).post('/api/v1/transacciones').send(gastoValido());
     expect(respuesta.status).toBe(401);
   });
 
@@ -108,7 +109,7 @@ describe('sin sesión: 401 en todo el recurso, nunca datos (§8.3)', () => {
   });
 
   it('PATCH sin sesión', async () => {
-    const respuesta = await request(app)
+    const respuesta = await desdeElFrontend(app)
       .patch('/api/v1/transacciones/00000000-0000-4000-8000-000000000000')
       .send(gastoValido());
     expect(respuesta.status).toBe(401);
@@ -116,8 +117,11 @@ describe('sin sesión: 401 en todo el recurso, nunca datos (§8.3)', () => {
 
   it('DELETE sin sesión', async () => {
     expect(
-      (await request(app).delete('/api/v1/transacciones/00000000-0000-4000-8000-000000000000'))
-        .status,
+      (
+        await desdeElFrontend(app).delete(
+          '/api/v1/transacciones/00000000-0000-4000-8000-000000000000',
+        )
+      ).status,
     ).toBe(401);
   });
 });

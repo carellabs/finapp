@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { agenteDesdeElFrontend, ORIGEN_FRONTEND_PRUEBAS } from '../soporte/origen';
 import type { Express } from 'express';
 import { FixedClock } from '@finapp/shared';
 import { crearApp } from '../../src/app';
@@ -16,7 +17,7 @@ const ENV = cargarEnv({
   NODE_ENV: 'test',
   PORT: '3000',
   DATABASE_URL: urlBd,
-  ORIGEN_FRONTEND: 'http://localhost:5173',
+  ORIGEN_FRONTEND: ORIGEN_FRONTEND_PRUEBAS,
 });
 
 let pool: Pool;
@@ -82,7 +83,7 @@ beforeEach(async () => {
   await pool.query(
     'TRUNCATE transacciones, presupuestos, prestamos, deudas RESTART IDENTITY CASCADE',
   );
-  agente = request.agent(app);
+  agente = agenteDesdeElFrontend(app);
   await agente
     .post('/api/v1/auth/login')
     .send({ nombreUsuario: 'fabrizio', password: 'contrasena-larga-de-verdad' });

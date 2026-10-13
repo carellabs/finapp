@@ -4,6 +4,7 @@ import type { Express } from 'express';
 import { crearApp, type OpcionesRateLimit } from '../../src/app';
 import { cargarEnv } from '../../src/config/env';
 import { crearPool } from '../../src/db/cliente';
+import { desdeElFrontend, ORIGEN_FRONTEND_PRUEBAS } from '../soporte/origen';
 
 /**
  * Clave de los limitadores: la IP real del cliente detrás de Cloudflare.
@@ -38,7 +39,7 @@ function crearAppConProxy(
     NODE_ENV: 'test',
     PORT: '3000',
     DATABASE_URL,
-    ORIGEN_FRONTEND: 'http://localhost:5173',
+    ORIGEN_FRONTEND: ORIGEN_FRONTEND_PRUEBAS,
     ...(trustProxy === undefined ? {} : { TRUST_PROXY: trustProxy }),
   });
   // El pool no se conecta hasta la primera query y estas rutas no la hacen.
@@ -53,7 +54,9 @@ async function estados(
   const resultado: number[] = [];
   for (const cabeceras of peticiones) {
     const peticion =
-      metodo === 'get' ? request(app).get(RUTA_GLOBAL) : request(app).post(RUTA_LOGIN).send({});
+      metodo === 'get'
+        ? request(app).get(RUTA_GLOBAL)
+        : desdeElFrontend(app).post(RUTA_LOGIN).send({});
     for (const [nombre, valor] of Object.entries(cabeceras)) peticion.set(nombre, valor);
     resultado.push((await peticion).status);
   }

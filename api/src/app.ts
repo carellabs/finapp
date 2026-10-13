@@ -8,6 +8,7 @@ import type { Env } from './config/env';
 import type { Pool } from './db/cliente';
 import { manejadorErrores, rutaNoEncontrada } from './http/errores';
 import { crearClaveCliente } from './http/ip-cliente';
+import { verificarOrigen } from './http/origen';
 import { crearRutasAuth } from './http/rutas/auth';
 import { crearRutasCategorias } from './http/rutas/categorias';
 import { crearRutasTransacciones } from './http/rutas/transacciones';
@@ -75,7 +76,13 @@ export function crearApp(
   app.set('trust proxy', env.TRUST_PROXY);
   app.disable('x-powered-by');
   app.use(helmet());
+  // `cors` va primero: responde por si mismo a la peticion previa (OPTIONS) de cualquier origen.
   app.use(cors({ origin: env.ORIGEN_FRONTEND, credentials: true }));
+  // Segunda barrera anti-CSRF (la primera es SameSite=Strict). Solo lee cabeceras, asi que va
+  // ANTES de leer el cuerpo (una peticion ajena no llega a parsearse), de los limitadores (no
+  // gasta los contadores del usuario ni empuja su cuenta hacia el bloqueo por intentos de
+  // login) y de las rutas.
+  app.use('/api/v1', verificarOrigen(env.ORIGEN_FRONTEND));
   app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
 

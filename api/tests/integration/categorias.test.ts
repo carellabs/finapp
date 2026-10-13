@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import request from 'supertest';
+import { agenteDesdeElFrontend, ORIGEN_FRONTEND_PRUEBAS } from '../soporte/origen';
 import type { Express } from 'express';
 import { crearApp } from '../../src/app';
 import { cargarEnv } from '../../src/config/env';
@@ -15,7 +16,7 @@ const ENV = cargarEnv({
   NODE_ENV: 'test',
   PORT: '3000',
   DATABASE_URL: urlBd,
-  ORIGEN_FRONTEND: 'http://localhost:5173',
+  ORIGEN_FRONTEND: ORIGEN_FRONTEND_PRUEBAS,
 });
 
 let pool: Pool;
@@ -42,7 +43,7 @@ describe('GET /api/v1/categorias', () => {
   });
 
   it('con sesión, devuelve las 16 categorías activas del seed', async () => {
-    const agente = request.agent(app);
+    const agente = agenteDesdeElFrontend(app);
     await agente
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: 'fabrizio', password: 'contrasena-larga-de-verdad' });

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import request from 'supertest';
+import { desdeElFrontend, ORIGEN_FRONTEND_PRUEBAS } from '../soporte/origen';
 import type { Express } from 'express';
 import { crearApp } from '../../src/app';
 import { cargarEnv } from '../../src/config/env';
@@ -16,7 +16,7 @@ const ENV = cargarEnv({
   NODE_ENV: 'test',
   PORT: '3000',
   DATABASE_URL: urlBd,
-  ORIGEN_FRONTEND: 'http://localhost:5173',
+  ORIGEN_FRONTEND: ORIGEN_FRONTEND_PRUEBAS,
 });
 
 const USUARIO = 'fabrizio';
@@ -55,7 +55,7 @@ beforeEach(async () => {
 
 describe('POST /api/v1/auth/login', () => {
   it('con credenciales correctas, devuelve 200 y una cookie de sesión httpOnly+sameSite=strict', async () => {
-    const respuesta = await request(app)
+    const respuesta = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: PASSWORD_CORRECTA });
 
@@ -67,7 +67,7 @@ describe('POST /api/v1/auth/login', () => {
   });
 
   it('con credenciales correctas, el cuerpo incluye el usuarioId (para particionar datos en el cliente)', async () => {
-    const respuesta = await request(app)
+    const respuesta = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: PASSWORD_CORRECTA });
 
@@ -80,7 +80,7 @@ describe('POST /api/v1/auth/login', () => {
   });
 
   it('la sesión creada es verificable directamente contra la BD', async () => {
-    const respuesta = await request(app)
+    const respuesta = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: PASSWORD_CORRECTA });
 
@@ -91,7 +91,7 @@ describe('POST /api/v1/auth/login', () => {
   });
 
   it('con contraseña incorrecta, devuelve 401 genérico y no filtra el motivo', async () => {
-    const respuesta = await request(app)
+    const respuesta = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: 'lo-que-sea-mal' });
 
@@ -100,10 +100,10 @@ describe('POST /api/v1/auth/login', () => {
   });
 
   it('con un usuario que no existe, devuelve el MISMO 401 genérico (no se enumeran usuarios)', async () => {
-    const respuestaInexistente = await request(app)
+    const respuestaInexistente = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: 'no-existe', password: 'lo-que-sea' });
-    const respuestaMalPassword = await request(app)
+    const respuestaMalPassword = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: 'lo-que-sea-mal' });
 
@@ -115,7 +115,7 @@ describe('POST /api/v1/auth/login', () => {
   });
 
   it('rechaza un body que no valida (falta password) con 422', async () => {
-    const respuesta = await request(app)
+    const respuesta = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO });
     expect(respuesta.status).toBe(422);
@@ -123,12 +123,12 @@ describe('POST /api/v1/auth/login', () => {
 
   it('tras 5 intentos fallidos, bloquea la cuenta aunque la contraseña sea correcta', async () => {
     for (let intento = 0; intento < 5; intento += 1) {
-      await request(app)
+      await desdeElFrontend(app)
         .post('/api/v1/auth/login')
         .send({ nombreUsuario: USUARIO, password: 'mal' });
     }
 
-    const respuesta = await request(app)
+    const respuesta = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: PASSWORD_CORRECTA });
 
@@ -136,10 +136,14 @@ describe('POST /api/v1/auth/login', () => {
   });
 
   it('un login correcto reinicia el contador de intentos fallidos', async () => {
-    await request(app).post('/api/v1/auth/login').send({ nombreUsuario: USUARIO, password: 'mal' });
-    await request(app).post('/api/v1/auth/login').send({ nombreUsuario: USUARIO, password: 'mal' });
+    await desdeElFrontend(app)
+      .post('/api/v1/auth/login')
+      .send({ nombreUsuario: USUARIO, password: 'mal' });
+    await desdeElFrontend(app)
+      .post('/api/v1/auth/login')
+      .send({ nombreUsuario: USUARIO, password: 'mal' });
 
-    const exito = await request(app)
+    const exito = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: PASSWORD_CORRECTA });
     expect(exito.status).toBe(200);
@@ -154,17 +158,17 @@ describe('POST /api/v1/auth/login', () => {
 
 describe('GET /api/v1/auth/me', () => {
   it('sin cookie de sesión, 401 (nunca "autenticado: true" para quien no lo está)', async () => {
-    const respuesta = await request(app).get('/api/v1/auth/me');
+    const respuesta = await desdeElFrontend(app).get('/api/v1/auth/me');
     expect(respuesta.status).toBe(401);
   });
 
   it('con una sesión válida, confirma autenticado', async () => {
-    const login = await request(app)
+    const login = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: PASSWORD_CORRECTA });
     const cookie = extraerCookieSesion(login.headers['set-cookie'] as string[] | undefined)!;
 
-    const respuesta = await request(app).get('/api/v1/auth/me').set('Cookie', cookie);
+    const respuesta = await desdeElFrontend(app).get('/api/v1/auth/me').set('Cookie', cookie);
 
     expect(respuesta.status).toBe(200);
     const cuerpo = (respuesta.body as { data: { autenticado: boolean; usuarioId: string } }).data;
@@ -174,20 +178,20 @@ describe('GET /api/v1/auth/me', () => {
   });
 
   it('con una sesión ya revocada (logout), vuelve a dar 401', async () => {
-    const login = await request(app)
+    const login = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: PASSWORD_CORRECTA });
     const cookie = extraerCookieSesion(login.headers['set-cookie'] as string[] | undefined)!;
-    await request(app).post('/api/v1/auth/logout').set('Cookie', cookie);
+    await desdeElFrontend(app).post('/api/v1/auth/logout').set('Cookie', cookie);
 
-    const respuesta = await request(app).get('/api/v1/auth/me').set('Cookie', cookie);
+    const respuesta = await desdeElFrontend(app).get('/api/v1/auth/me').set('Cookie', cookie);
     expect(respuesta.status).toBe(401);
   });
 });
 
 describe('POST /api/v1/auth/logout', () => {
   it('revoca la sesión: el mismo token deja de ser válido después', async () => {
-    const login = await request(app)
+    const login = await desdeElFrontend(app)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: PASSWORD_CORRECTA });
     const cookie = extraerCookieSesion(login.headers['set-cookie'] as string[] | undefined)!;
@@ -195,13 +199,13 @@ describe('POST /api/v1/auth/logout', () => {
 
     expect(await verificarSesion(pool, token)).not.toBeNull();
 
-    await request(app).post('/api/v1/auth/logout').set('Cookie', cookie);
+    await desdeElFrontend(app).post('/api/v1/auth/logout').set('Cookie', cookie);
 
     expect(await verificarSesion(pool, token)).toBeNull();
   });
 
   it('sin cookie de sesión, sigue devolviendo 204 (logout es idempotente)', async () => {
-    const respuesta = await request(app).post('/api/v1/auth/logout');
+    const respuesta = await desdeElFrontend(app).post('/api/v1/auth/logout');
     expect(respuesta.status).toBe(204);
   });
 });
@@ -213,12 +217,12 @@ describe('rate limiting de /api/v1/auth/login (§8.2)', () => {
     const appLimitada = crearApp(ENV, pool);
 
     for (let intento = 0; intento < 10; intento += 1) {
-      await request(appLimitada)
+      await desdeElFrontend(appLimitada)
         .post('/api/v1/auth/login')
         .send({ nombreUsuario: USUARIO, password: 'mal' });
     }
 
-    const respuesta = await request(appLimitada)
+    const respuesta = await desdeElFrontend(appLimitada)
       .post('/api/v1/auth/login')
       .send({ nombreUsuario: USUARIO, password: 'mal' });
 

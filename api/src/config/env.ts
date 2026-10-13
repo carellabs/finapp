@@ -2,6 +2,33 @@ import { z } from 'zod';
 import { interpretarTrustProxy } from './trust-proxy';
 
 /**
+ * ¿Es `valor` un origen http(s) escrito EXACTAMENTE como lo serializa el
+ * navegador en la cabecera `Origin`: `esquema://host[:puerto]`, en minúsculas,
+ * sin el puerto por defecto, sin barra final, ruta, consulta ni credenciales?
+ *
+ * `new URL(valor).origin` es esa serialización, así que el valor es válido si
+ * y solo si coincide con ella. CORS y la comprobación anti-CSRF lo comparan
+ * como texto con lo que manda el navegador: un valor que no coincida nunca
+ * casaría y la API rechazaría todas las peticiones que modifican datos sin
+ * decir por qué. Por eso se rechaza en el arranque y no se "arregla" aquí.
+ */
+function esOrigenExacto(valor: string): boolean {
+  try {
+    const url = new URL(valor);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && url.origin === valor;
+  } catch {
+    return false;
+  }
+}
+
+// Nombra la variable, NUNCA el valor recibido (cargarEnv no vuelca valores).
+const MOTIVO_ORIGEN_FRONTEND =
+  'debe ser un origen exacto: esquema http o https, host en minusculas y puerto solo si no es el de por defecto, sin barra final, ruta, consulta ni credenciales';
+
+// En produccion la cookie de sesion es `Secure` y la app se sirve por HTTPS detras de Cloudflare.
+const MOTIVO_ORIGEN_HTTPS = 'en produccion debe ser https';
+
+/**
  * Configuracion validada en el arranque. Si falta algo, el proceso NO arranca:
  * un servidor a medio configurar falla mas tarde y peor.
  */
@@ -10,17 +37,27 @@ const esquemaEnv = z
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().int().positive().max(65535).default(3000),
     DATABASE_URL: z.string().min(1, 'DATABASE_URL es obligatoria'),
-    ORIGEN_FRONTEND: z.string().min(1, 'ORIGEN_FRONTEND es obligatorio'),
+    ORIGEN_FRONTEND: z
+      .string()
+      .min(1, 'ORIGEN_FRONTEND es obligatorio')
+      .refine(esOrigenExacto, MOTIVO_ORIGEN_FRONTEND),
     // En crudo; se interpreta abajo porque la regla depende de NODE_ENV.
     TRUST_PROXY: z.string().optional(),
   })
   .transform((datos, ctx) => {
-    const trustProxy = interpretarTrustProxy(datos.TRUST_PROXY, datos.NODE_ENV === 'production');
+    const enProduccion = datos.NODE_ENV === 'production';
+    const trustProxy = interpretarTrustProxy(datos.TRUST_PROXY, enProduccion);
+    // `esOrigenExacto` ya garantizo el esquema en minusculas: basta mirar el prefijo.
+    const origenSinHttps = enProduccion && !datos.ORIGEN_FRONTEND.startsWith('https://');
 
+    // Se comprueban las dos antes de abortar: quien arregla el despliegue ve todo de una vez.
     if (!trustProxy.ok) {
       ctx.addIssue({ code: 'custom', path: ['TRUST_PROXY'], message: trustProxy.motivo });
-      return z.NEVER;
     }
+    if (origenSinHttps) {
+      ctx.addIssue({ code: 'custom', path: ['ORIGEN_FRONTEND'], message: MOTIVO_ORIGEN_HTTPS });
+    }
+    if (!trustProxy.ok || origenSinHttps) return z.NEVER;
 
     return { ...datos, TRUST_PROXY: trustProxy.valor };
   });
