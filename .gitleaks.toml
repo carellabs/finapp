@@ -1,0 +1,8 @@
+# Configuracion de gitleaks para FinApp.
+# Sin allowlists por defecto: un allowlist es un punto ciego, y solo se anade
+# cuando exista un falso positivo real y documentado.
+
+title = "FinApp"
+
+[extend]
+useDefault = true

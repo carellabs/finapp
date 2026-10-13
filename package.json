@@ -1,0 +1,53 @@
+{
+  "name": "finapp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.21.0"
+  },
+  "workspaces": [
+    "shared",
+    "api",
+    "web"
+  ],
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "build:imagenes": "docker build -f docker/api.Dockerfile --target production -t finapp-api:ci . && docker build -f docker/web.Dockerfile --target production -t finapp-web:ci .",
+    "audit:deps": "npm audit --audit-level=high",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "ci": "node scripts/ci.mjs",
+    "prepare": "husky",
+    "coverage": "npm run coverage --workspaces --if-present",
+    "test:integration": "node scripts/con-db-test.mjs node scripts/suite-integracion.mjs",
+    "test:scripts": "node --test scripts/*.test.mjs"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --max-warnings=0",
+      "prettier --check"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --check"
+    ]
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.8.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.8.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vitest": "^4.1.10"
+  }
+}

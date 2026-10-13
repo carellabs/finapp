@@ -1,0 +1,41 @@
+# Dependencias
+node_modules/
+
+# Builds
+dist/
+build/
+*.tsbuildinfo
+
+# Entorno — NUNCA commitear secretos
+.env
+.env.*
+!.env.example
+
+# Tests y cobertura
+coverage/
+.stryker-tmp/
+reports/
+playwright-report/
+test-results/
+blob-report/
+
+# Caches
+.vite/
+.eslintcache
+.npm/
+
+# Sistema y editor
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+
+# Backups locales de la BD
+*.dump
+*.sql.gpg
+
+# Tooling de IA local (no versionar)
+.atl/
+.agents/
+.claude/settings.local.json
+.claude/launch.json

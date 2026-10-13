@@ -1,0 +1,10 @@
+# Gates rapidos antes de cada commit.
+# El resto de la cadena (audit + build) vive en `npm run ci`.
+#
+# Si algo falla aqui, el commit se cancela. Es deliberado: es mas barato
+# arreglarlo ahora que descubrirlo con el historico ya escrito.
+
+npx lint-staged
+npm run typecheck
+npm run test
+npm run scan:secrets

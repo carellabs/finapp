@@ -1,0 +1,82 @@
+name: finapp
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?falta POSTGRES_USER en .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: ${POSTGRES_DB:?falta POSTGRES_DB en .env}
+    # Solo loopback: la BD nunca se expone fuera de esta maquina.
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - datos-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      target: dev
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: ${DATABASE_URL:?falta DATABASE_URL en .env}
+      ORIGEN_FRONTEND: ${ORIGEN_FRONTEND:-http://localhost:5173}
+    # Solo loopback: el servidor de desarrollo no se expone a la red local.
+    ports:
+      - '127.0.0.1:3000:3000'
+    volumes:
+      - .:/app
+      # Volumenes anonimos: los node_modules del contenedor (Alpine) no se
+      # pisan con los del host (Windows).
+      - /app/node_modules
+      - /app/api/node_modules
+      - /app/web/node_modules
+      - /app/shared/node_modules
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:3000/health']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      target: dev
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000/api/v1}
+    ports:
+      - '127.0.0.1:5173:5173'
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/api/node_modules
+      - /app/web/node_modules
+      - /app/shared/node_modules
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://127.0.0.1:5173/']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  datos-postgres:

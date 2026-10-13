@@ -1,0 +1,102 @@
+#!/usr/bin/env node
+/**
+ * Levanta un Postgres efimero, aplica las migraciones, ejecuta el comando que
+ * se le pase y lo destruye todo al terminar.
+ *
+ * Sustituye a Testcontainers, que se descarto porque arrastra una cadena de
+ * dependencias con una vulnerabilidad ALTA sin fix (archiver -> glob ->
+ * minimatch -> brace-expansion). Aqui Docker se invoca por CLI: cero
+ * dependencias npm nuevas y la misma imagen que usa produccion.
+ */
+import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+
+const CONTENEDOR = 'finapp-db-test';
+const IMAGEN = 'postgres:16-alpine';
+const PUERTO = process.env.PUERTO_DB_TEST ?? '55433';
+const CLAVE = randomBytes(18).toString('base64url');
+const URL_BD = `postgresql://finapp:${CLAVE}@127.0.0.1:${PUERTO}/finapp_test`;
+
+const correr = (comando, argumentos, opciones = {}) =>
+  spawnSync(comando, argumentos, { stdio: 'inherit', shell: true, ...opciones });
+
+const silencioso = (comando, argumentos) =>
+  spawnSync(comando, argumentos, { stdio: 'ignore', shell: true }).status === 0;
+
+function destruir() {
+  spawnSync('docker', ['rm', '-f', CONTENEDOR], { stdio: 'ignore', shell: true });
+}
+
+if (!silencioso('docker', ['info'])) {
+  console.error('\n[db-test] FALLO: Docker no responde. Arranca Docker Desktop.');
+  process.exit(1);
+}
+
+// Un contenedor huerfano de una ejecucion anterior falsearia los resultados.
+destruir();
+
+console.error(`[db-test] levantando ${IMAGEN} en 127.0.0.1:${PUERTO}...`);
+const arranque = correr('docker', [
+  'run',
+  '--detach',
+  '--name',
+  CONTENEDOR,
+  '--env',
+  `POSTGRES_PASSWORD=${CLAVE}`,
+  '--env',
+  'POSTGRES_USER=finapp',
+  '--env',
+  'POSTGRES_DB=finapp_test',
+  // tmpfs: la BD vive en RAM. Es un desechable, no necesita durabilidad.
+  '--tmpfs',
+  '/var/lib/postgresql/data',
+  '--publish',
+  `127.0.0.1:${PUERTO}:5432`,
+  IMAGEN,
+]);
+
+if (arranque.status !== 0) {
+  console.error('[db-test] FALLO: no se pudo arrancar el contenedor.');
+  destruir();
+  process.exit(1);
+}
+
+process.on('exit', destruir);
+process.on('SIGINT', () => {
+  destruir();
+  process.exit(130);
+});
+
+// Esperar a que acepte conexiones. Sin esto, la primera migracion falla.
+let listo = false;
+for (let intento = 0; intento < 60; intento += 1) {
+  if (
+    silencioso('docker', ['exec', CONTENEDOR, 'pg_isready', '-U', 'finapp', '-d', 'finapp_test'])
+  ) {
+    listo = true;
+    break;
+  }
+  spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},500)'], { stdio: 'ignore' });
+}
+
+if (!listo) {
+  console.error('[db-test] FALLO: la base de datos no acepto conexiones a tiempo.');
+  process.exit(1);
+}
+
+const entorno = { ...process.env, DATABASE_URL: URL_BD };
+
+console.error('[db-test] aplicando migraciones...');
+if (correr('npm', ['run', 'migrate:up', '-w', '@finapp/api'], { env: entorno }).status !== 0) {
+  console.error('[db-test] FALLO: las migraciones no aplicaron.');
+  process.exit(1);
+}
+
+const [comando, ...argumentos] = process.argv.slice(2);
+if (comando === undefined) {
+  console.error('[db-test] FALLO: falta el comando a ejecutar.');
+  process.exit(1);
+}
+
+const resultado = correr(comando, argumentos, { env: entorno });
+process.exit(resultado.status ?? 1);

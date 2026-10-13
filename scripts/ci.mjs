@@ -1,0 +1,48 @@
+#!/usr/bin/env node
+/**
+ * Cadena de gates de calidad y seguridad.
+ *
+ * Sustituye al workflow de CI: este proyecto no tiene remoto, asi que los gates
+ * corren aqui. Se para en el primer fallo; ninguna fase se cierra en rojo.
+ */
+import { spawnSync } from 'node:child_process';
+
+const PASOS = [
+  ['lint', ['run', 'lint']],
+  ['format', ['run', 'format']],
+  ['typecheck', ['run', 'typecheck']],
+  // Con cobertura: los umbrales (90% en shared, 80% en api) solo son un gate
+  // real si se ejecutan. `npm run test` a secas no los comprueba.
+  ['test + cobertura', ['run', 'coverage']],
+  // Postgres real y efimero: migraciones up/down/up, EXPLAIN y constraints.
+  ['integracion', ['run', 'test:integration']],
+  ['audit', ['run', 'audit:deps']],
+  ['secretos', ['run', 'scan:secrets']],
+  // Los tests del propio gate de secretos: necesitan Docker (o gitleaks) y son lentos,
+  // por eso viven aqui y no en el pre-commit.
+  ['tests de scripts', ['run', 'test:scripts']],
+  ['build', ['run', 'build']],
+  // El target `production` de los Dockerfiles no lo construye ningun otro gate: un `COPY`
+  // sin `--chown` o un `npm ci` con scripts rompia el despliegue y nadie lo veia.
+  ['imagenes docker', ['run', 'build:imagenes']],
+];
+
+const inicio = Date.now();
+const resultados = [];
+
+for (const [nombre, argumentos] of PASOS) {
+  console.error(`\n──────── ${nombre} ────────`);
+  const desde = Date.now();
+  const { status } = spawnSync('npm', argumentos, { stdio: 'inherit', shell: true });
+  const segundos = ((Date.now() - desde) / 1000).toFixed(1);
+
+  if (status !== 0) {
+    resultados.push(`  FALLO  ${nombre} (${segundos}s)`);
+    console.error(`\n${resultados.join('\n')}\n\nCI EN ROJO: se detiene en "${nombre}".`);
+    process.exit(1);
+  }
+  resultados.push(`  OK     ${nombre} (${segundos}s)`);
+}
+
+const total = ((Date.now() - inicio) / 1000).toFixed(1);
+console.error(`\n${resultados.join('\n')}\n\nCI EN VERDE (${total}s).`);

@@ -1,0 +1,13 @@
+{
+  "name": "FinApp",
+  "short_name": "FinApp",
+  "description": "Control y optimizacion de gastos personales",
+  "lang": "es-ES",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f1e8",
+  "theme_color": "#f4f1e8",
+  "icons": []
+}
