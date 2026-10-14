@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import request from 'supertest';
+import { agenteDesdeElFrontend, desdeElFrontend, ORIGEN_FRONTEND_PRUEBAS } from '../soporte/origen';
 import type { Express } from 'express';
 import { crearApp } from '../../src/app';
 import { cargarEnv } from '../../src/config/env';
@@ -15,12 +15,12 @@ const ENV = cargarEnv({
   NODE_ENV: 'test',
   PORT: '3000',
   DATABASE_URL: urlBd,
-  ORIGEN_FRONTEND: 'http://localhost:5173',
+  ORIGEN_FRONTEND: ORIGEN_FRONTEND_PRUEBAS,
 });
 
 let pool: Pool;
 let app: Express;
-let agente: ReturnType<typeof request.agent>;
+let agente: ReturnType<typeof agenteDesdeElFrontend>;
 let categoriaId: string;
 
 interface RespuestaDato<T> {
@@ -55,7 +55,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await pool.query('TRUNCATE presupuestos RESTART IDENTITY CASCADE');
-  agente = request.agent(app);
+  agente = agenteDesdeElFrontend(app);
   await agente
     .post('/api/v1/auth/login')
     .send({ nombreUsuario: 'fabrizio', password: 'contrasena-larga-de-verdad' });
@@ -63,7 +63,7 @@ beforeEach(async () => {
 
 describe('PUT /api/v1/presupuestos (upsert por categoría+mes)', () => {
   it('sin sesión, 401', async () => {
-    const respuesta = await request(app)
+    const respuesta = await desdeElFrontend(app)
       .put('/api/v1/presupuestos')
       .send({ categoriaId, mesCobertura: '2026-06', montoCents: 35000 });
     expect(respuesta.status).toBe(401);
