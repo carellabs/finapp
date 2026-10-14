@@ -70,6 +70,8 @@ La **igualdad** (no la implicación) fuerza las dos direcciones: una transferenc
 
 `objetivo_historico.desglose JSONB NOT NULL` con `CHECK (jsonb_typeof(desglose) = 'object')`. Sin el desglose por categoría es imposible responder "qué categoría empujó el objetivo al alza", que es el aviso crítico de §3.4.
 
+`objetivo_historico.mes_cobertura` es `UNIQUE`: una fila por mes, la foto de cierre, **inmutable**. Solo la escribe la tarea programada `foto-mensual-objetivos` y solo con `INSERT … ON CONFLICT (mes_cobertura) DO NOTHING` (`insertarSiFalta`, `api/src/repositories/objetivo-historico.ts`); no hay `UPDATE` ni `DELETE` en el código, y ningún `GET` escribe. La unicidad es lo que hace segura la tarea con varias instancias a la vez. No hace falta una columna de "definitiva" ni una migración: las filas son siempre de meses cerrados, salvo las que dejó la versión antigua de `GET /objetivos/estado`, que se respetan.
+
 ## `saldo_ahorro_declarado` · `configuracion`
 
 Serie temporal del ahorro declarado (no inferido). `configuracion` clave-valor con los defaults de §3: `margen_seguridad=0.15` (nunca 0), `meses_objetivo=6`, `n_meses_csm=3`, `porcentaje_ahorro_objetivo=0.22`, umbrales de divergencia.

@@ -72,6 +72,10 @@ const esquemaEnv = z
     // Cada cuánto se purgan las sesiones caducadas. Ya no autentican (se
     // comprueba `expira_en` en cada petición): purgar es solo higiene de la tabla.
     PURGA_SESIONES_INTERVALO_MINUTOS: enteroDecimal(1, 1440, 60),
+    // Cada cuánto se mira si hay un mes cerrado sin su foto de objetivos. Un mes se cierra
+    // a medianoche de Madrid y la foto sale en la siguiente pasada, así que este valor es
+    // lo máximo que tarda en aparecer. Idempotente: pasar de más no cuesta nada.
+    FOTO_MENSUAL_OBJETIVOS_INTERVALO_MINUTOS: enteroDecimal(1, 1440, 60),
   })
   .transform((datos, ctx) => {
     const enProduccion = datos.NODE_ENV === 'production';

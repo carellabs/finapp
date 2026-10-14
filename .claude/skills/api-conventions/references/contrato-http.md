@@ -50,7 +50,7 @@ En `/api/v1`, toda petición que no sea `GET`, `HEAD` ni `OPTIONS` (`POST`, `PUT
 
 El `403` no repite lo recibido: ni en el cuerpo ni en el log. El log del rechazo (nivel `warn`) lleva solo el método, la ruta sin consulta y dos booleanos (`origen_presente`, `sec_fetch_site_presente`), y el mismo `request_id` que el cliente. `GET`, `HEAD` y `OPTIONS` (incluida la petición previa de CORS) se tratan como métodos seguros y no se comprueban. Todo test que haga `POST`/`PUT`/`PATCH`/`DELETE` contra la app debe llevar `Origin`: `api/tests/soporte/origen.ts`.
 
-**Excepción conocida: un `GET` que escribe.** Que `GET` y `HEAD` sean seguros es una convención del contrato, y `GET /api/v1/objetivos/estado` (también `HEAD`, que ejecuta el mismo manejador) la incumple: hace un `upsert` en `objetivo_historico` con la foto del mes actual, para compararla el mes siguiente (objetivo móvil). La comprobación de origen no lo cubre por ser `GET`. Impacto mínimo: (1) escribe solo el cálculo del mes actual con los datos que ya hay, ningún dato aportado por quien hace la petición; (2) es idempotente, repetirlo con los mismos datos deja la misma fila; (3) una petición entre sitios no lleva la cookie (`SameSite=Strict`). Queda pendiente moverlo a una escritura explícita o a un proceso programado; no se ha cambiado su semántica.
+**Ningún `GET` ni `HEAD` escribe en la base de datos.** Es una invariante y no una cortesía: la comprobación de origen no los cubre, así que un `GET` que escribiera quedaría fuera de la defensa anti-CSRF (y de un futuro usuario de base de datos de solo lectura para las lecturas). `GET /api/v1/objetivos/estado` (y su `HEAD`, que ejecuta el mismo manejador) calcula el mes en curso al vuelo y no guarda nada: solo lee la foto de cierre del mes anterior. Esa foto (`objetivo_historico`) la escribe la tarea programada `foto-mensual-objetivos` cuando el mes se cierra (ver `objetivos-ahorro`). Lo vigila `api/tests/integration/objetivos-solo-lectura.test.ts`: cada `GET` de la API, y su `HEAD`, dejan la base de datos idéntica tabla por tabla. Quien añada un `GET` lo añade a esa lista.
 
 ## Endpoints
 
@@ -69,7 +69,7 @@ El `403` no repite lo recibido: ni en el cuerpo ni en el log. El log del rechazo
 | `GET·POST` | `/api/v1/ahorro-declarado` | serie temporal del saldo declarado |
 | `GET` | `/api/v1/dashboard?mes=YYYY-MM` | agregados del mes |
 | `GET` | `/api/v1/insights?mes=YYYY-MM` | solo los que superan su umbral |
-| `GET` | `/api/v1/objetivos/estado` | CSM, progreso, proyección, alertas |
+| `GET` | `/api/v1/objetivos/estado` | CSM, progreso, proyección, alertas. Solo lectura: el mes en curso se calcula al vuelo y la alerta de objetivo al alza compara con la foto de cierre del mes anterior |
 | `GET` | `/health` | sin sesión; sin versiones ni estado de dependencias |
 
 ## Paginación

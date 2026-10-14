@@ -1,11 +1,13 @@
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { SystemClock, type Clock } from '@finapp/shared';
 import { crearApp } from './app';
 import { iniciarPurgaSesiones } from './auth/purga-sesiones';
 import type { Env } from './config/env';
 import { crearPool, type Pool } from './db/cliente';
 import { causaDeError, registrarEnConsola, type Registrar } from './infra/registro';
 import type { TareaPeriodica } from './infra/tarea-periodica';
+import { iniciarFotoMensualObjetivos } from './usecases/foto-mensual-tarea';
 
 /**
  * Plazo máximo para apagar. `docker stop` manda SIGTERM y, a los 10 s, SIGKILL: el plazo
@@ -21,9 +23,21 @@ export interface DependenciasServidor {
   readonly puerto?: number;
   readonly registrar?: Registrar;
   readonly plazoApagadoMs?: number;
+  /**
+   * Por defecto, el reloj del sistema (Europe/Madrid). Es el mismo para la app y para la
+   * foto mensual de objetivos: los dos tienen que coincidir en qué mes está cerrado.
+   */
+  readonly clock?: Clock;
   /** Por defecto, la purga real de sesiones. Se sustituye en los tests del apagado. */
   readonly iniciarPurga?: (
     pool: Pool,
+    intervaloMinutos: number,
+    registrar: Registrar,
+  ) => TareaPeriodica;
+  /** Por defecto, la foto mensual real de objetivos. Se sustituye en los tests del apagado. */
+  readonly iniciarFotoMensual?: (
+    pool: Pool,
+    clock: Clock,
     intervaloMinutos: number,
     registrar: Registrar,
   ) => TareaPeriodica;
@@ -58,12 +72,20 @@ export function arrancar(env: Env, deps: DependenciasServidor = {}): ServidorEnM
     registrar = registrarEnConsola,
     puerto = env.PORT,
     plazoApagadoMs = PLAZO_APAGADO_MS,
+    clock = new SystemClock(),
     iniciarPurga = iniciarPurgaSesiones,
+    iniciarFotoMensual = iniciarFotoMensualObjetivos,
   } = deps;
   const pool = deps.pool ?? crearPool(env.DATABASE_URL, registrar);
-  const app = crearApp(env, pool);
+  const app = crearApp(env, pool, undefined, clock);
 
   const purgaSesiones = iniciarPurga(pool, env.PURGA_SESIONES_INTERVALO_MINUTOS, registrar);
+  const fotoMensual = iniciarFotoMensual(
+    pool,
+    clock,
+    env.FOTO_MENSUAL_OBJETIVOS_INTERVALO_MINUTOS,
+    registrar,
+  );
 
   const servidor = app.listen(puerto, () => {
     const direccion = servidor.address() as AddressInfo;
@@ -81,8 +103,9 @@ export function arrancar(env: Env, deps: DependenciasServidor = {}): ServidorEnM
 
     const ordenado = (async () => {
       await cerrarServidor(servidor);
-      // Antes de cerrar el pool: una purga a medias no debe encontrárselo cerrado.
-      await purgaSesiones.detener();
+      // Antes de cerrar el pool: una tarea a medias no debe encontrárselo cerrado. Las dos a
+      // la vez: el plazo del apagado es uno solo y no se suma.
+      await Promise.all([purgaSesiones.detener(), fotoMensual.detener()]);
       await cerrarPool();
     })().then(
       () => 'ok' as const,

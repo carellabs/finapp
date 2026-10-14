@@ -18,11 +18,7 @@ import {
 import type { Pool } from '../db/cliente';
 import { construirContexto } from './contexto-financiero';
 import { listarObjetivos } from './objetivos';
-import {
-  desgloseACents,
-  obtenerPorMes,
-  upsert as upsertObjetivoHistorico,
-} from '../repositories/objetivo-historico';
+import { desgloseACents, obtenerPorMes } from '../repositories/objetivo-historico';
 
 /** Horizonte de referencia para "ahorro mínimo necesario" cuando el ritmo es insuficiente. */
 const HORIZONTE_MESES_SI_RITMO_INSUFICIENTE = 24;
@@ -97,7 +93,9 @@ export async function obtenerEstadoObjetivos(
     HORIZONTE_MESES_SI_RITMO_INSUFICIENTE,
   );
 
-  // Objetivo móvil (§3.4): comparar contra la foto guardada del mes anterior.
+  // Objetivo móvil (§3.4): comparar contra la foto de cierre del mes anterior, que guarda
+  // la tarea programada (`foto-mensual-objetivos`). Esta consulta es de solo lectura: el
+  // mes en curso se calcula al vuelo y no se guarda en ninguna parte.
   const filaAnterior = await obtenerPorMes(pool, mesAnterior(mesActual));
   const objetivoAnteriorSnapshot =
     filaAnterior === null
@@ -110,17 +108,6 @@ export async function obtenerEstadoObjetivos(
     { objetivo: fondo.objetivo, desglosePorCategoria: resultadoCSM.desglosePorCategoria },
     objetivoAnteriorSnapshot,
   );
-
-  // Persistir la foto de ESTE mes: la próxima consulta (este mes o el que
-  // viene) la usará como "mes anterior". Recalcular sobrescribe, no acumula.
-  await upsertObjetivoHistorico(pool, {
-    mesCobertura: mesActual,
-    csm: resultadoCSM.csm,
-    objetivo: fondo.objetivo,
-    margenSeguridad: config.margenSeguridad,
-    mesesObjetivo: config.mesesObjetivo,
-    desglosePorCategoria: resultadoCSM.desglosePorCategoria,
-  });
 
   // Conciliación (§3.6): ahorro DECLARADO vs. suma de ahorros netos calculados.
   const calculado =
