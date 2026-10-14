@@ -67,11 +67,14 @@ const ESCENARIOS: readonly Escenario[] = [
   },
 ];
 
-/** Líneas de log que ha escrito el manejador central, ya parseadas. */
+/**
+ * Líneas de log que ha escrito el manejador central, ya parseadas. Las de acceso (una por
+ * petición, `mensaje: 'peticion'`) quedan fuera: tienen su propio test.
+ */
 function lineasDeLog(espia: MockInstance): Record<string, unknown>[] {
-  return espia.mock.calls.map(
-    (llamada) => JSON.parse(String(llamada[0])) as Record<string, unknown>,
-  );
+  return espia.mock.calls
+    .map((llamada) => JSON.parse(String(llamada[0])) as Record<string, unknown>)
+    .filter((linea) => linea['mensaje'] !== 'peticion');
 }
 
 /** Cuerpo de un error de la API, tal y como lo tipan los demás tests. */
@@ -87,6 +90,20 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('la ruta del log del 429 es la saneada', () => {
+  it('con tope de 200 caracteres más la marca, aunque la URL mida 15 KB', async () => {
+    const app = crearAppLimitada({ limitePorMinutoGlobal: 1, limitePorVentanaLogin: 1000 });
+    await request(app).get('/api/v1/recurso');
+
+    const limitada = await request(app).get(`/api/v1/${'r'.repeat(15 * 1024)}?q=1`);
+
+    expect(limitada.status).toBe(LIMITADO);
+    const rechazos = lineasDeLog(espiaLog).filter((linea) => linea['estado'] === LIMITADO);
+    expect(rechazos).toHaveLength(1);
+    expect(String(rechazos[0]?.['ruta'])).toHaveLength(200 + '…[truncada]'.length);
+  });
 });
 
 describe.each(ESCENARIOS)('el 429 de $limitador', (escenario) => {

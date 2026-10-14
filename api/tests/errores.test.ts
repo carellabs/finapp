@@ -1,18 +1,31 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { NextFunction, Request, Response } from 'express';
-import { crearErrorHttp, manejadorErrores } from '../src/http/errores';
+import { crearErrorHttp, manejadorErrores, rutaNoEncontrada } from '../src/http/errores';
 
 interface RespuestaCapturada {
   estado: number;
   cuerpo: { error: { codigo: string; mensaje: string; request_id: string } };
 }
 
-/** Doble de `Response` que captura lo que el manejador intenta enviar. */
-function crearRespuesta(): { res: Response; capturado: () => RespuestaCapturada } {
+/**
+ * Doble de `Response` que captura lo que el manejador intenta enviar. `locals` es donde
+ * `asignarRequestId` deja el id de la petición; `cabeceras` lo que se pone con `setHeader`.
+ */
+function crearRespuesta(locals: Record<string, unknown> = {}): {
+  res: Response;
+  capturado: () => RespuestaCapturada;
+  cabeceras: Record<string, unknown>;
+} {
   let estado = 0;
   let cuerpo: unknown;
+  const cabeceras: Record<string, unknown> = {};
 
   const res = {
+    locals,
+    setHeader(nombre: string, valor: unknown) {
+      cabeceras[nombre] = valor;
+      return this;
+    },
     status(codigo: number) {
       estado = codigo;
       return this;
@@ -23,7 +36,7 @@ function crearRespuesta(): { res: Response; capturado: () => RespuestaCapturada 
     },
   } as unknown as Response;
 
-  return { res, capturado: () => ({ estado, cuerpo }) as RespuestaCapturada };
+  return { res, capturado: () => ({ estado, cuerpo }) as RespuestaCapturada, cabeceras };
 }
 
 const peticion = {} as Request;
@@ -135,7 +148,7 @@ describe('manejadorErrores: registro con contexto', () => {
     );
   }
 
-  it('sin contexto el registro conserva sus cuatro campos y el nivel error', () => {
+  it('sin contexto el registro conserva sus cuatro campos; un 4xx es warn', () => {
     const espia = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     manejadorErrores(
@@ -147,7 +160,7 @@ describe('manejadorErrores: registro con contexto', () => {
 
     const [linea] = escrito(espia);
     expect(Object.keys(linea ?? {}).sort()).toEqual(['estado', 'mensaje', 'nivel', 'request_id']);
-    expect(linea).toMatchObject({ nivel: 'error', estado: 422 });
+    expect(linea).toMatchObject({ nivel: 'warn', estado: 422 });
   });
 
   it('añade al registro el nivel y los campos del error, y no los envía al cliente', () => {
@@ -184,5 +197,98 @@ describe('manejadorErrores: registro con contexto', () => {
       estado: 403,
       mensaje: 'Origen no permitido',
     });
+  });
+});
+
+describe('manejadorErrores: el request_id es el de la petición', () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function escrito(espia: MockInstance): Record<string, unknown>[] {
+    return espia.mock.calls.map(
+      (llamada) => JSON.parse(String(llamada[0])) as Record<string, unknown>,
+    );
+  }
+
+  it('usa el id que `asignarRequestId` dejó en la respuesta, en el cuerpo y en el log, y no genera otro', () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { res, capturado, cabeceras } = crearRespuesta({ requestId: 'id-de-la-peticion' });
+
+    manejadorErrores(new Error('x'), peticion, res, siguiente);
+
+    expect(capturado().cuerpo.error.request_id).toBe('id-de-la-peticion');
+    expect(escrito(espia)[0]).toMatchObject({ request_id: 'id-de-la-peticion' });
+    // La cabecera ya se puso al empezar la petición: el manejador no la repite.
+    expect(cabeceras).toEqual({});
+  });
+
+  it('también en un 4xx de un caso de uso', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { res, capturado } = crearRespuesta({ requestId: 'otro-id' });
+
+    manejadorErrores(crearErrorHttp(422, 'x'), peticion, res, siguiente);
+
+    expect(capturado().cuerpo.error.request_id).toBe('otro-id');
+  });
+
+  it('si la petición no tenía id (el middleware no corrió), le da uno y la cabecera lo dice: cuerpo, log y cabecera coinciden', () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { res, capturado, cabeceras } = crearRespuesta();
+
+    manejadorErrores(new Error('x'), peticion, res, siguiente);
+
+    const id = capturado().cuerpo.error.request_id;
+    expect(id).toMatch(UUID);
+    expect(cabeceras['X-Request-Id']).toBe(id);
+    expect(escrito(espia)[0]).toMatchObject({ request_id: id });
+  });
+
+  it('la línea de log del error también pasa por la redacción: un campo sensible no sale', () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const error = crearErrorHttp(403, 'Origen no permitido');
+    error.registro = {
+      nivel: 'warn',
+      campos: {
+        metodo: 'POST',
+        cookie: 'sid=valor-privado',
+        Authorization: 'Bearer valor-privado',
+      },
+    };
+
+    manejadorErrores(error, peticion, crearRespuesta().res, siguiente);
+
+    expect(espia).toHaveBeenCalledTimes(1);
+    expect(String(espia.mock.calls[0]?.[0])).not.toContain('valor-privado');
+    expect(escrito(espia)[0]).toMatchObject({ metodo: 'POST', cookie: '[REDACTADO]' });
+  });
+});
+
+describe('rutaNoEncontrada', () => {
+  it('el 404 lleva el request_id de la petición, sin eco de la ruta', () => {
+    const { res, capturado } = crearRespuesta({ requestId: 'id-del-404' });
+
+    rutaNoEncontrada(peticion, res, siguiente);
+
+    expect(capturado().estado).toBe(404);
+    expect(capturado().cuerpo).toEqual({
+      error: {
+        codigo: 'NO_ENCONTRADO',
+        mensaje: 'Recurso no encontrado',
+        request_id: 'id-del-404',
+      },
+    });
+  });
+
+  it('sin id previo, el 404 también lo recibe (y la cabecera lo dice)', () => {
+    const { res, capturado, cabeceras } = crearRespuesta();
+
+    rutaNoEncontrada(peticion, res, siguiente);
+
+    const id = capturado().cuerpo.error.request_id;
+    expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(cabeceras['X-Request-Id']).toBe(id);
   });
 });

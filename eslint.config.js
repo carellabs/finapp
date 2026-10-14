@@ -66,6 +66,37 @@ export default tseslint.config(
     rules: { 'no-console': 'off' },
   },
   {
+    // Todo lo que la API escribe en el log pasa por `registrarEnConsola`
+    // (`api/src/infra/registro.ts`), que redacta cookies, autorizacion, contrasenas e importes
+    // por nombre de clave. Un `console.error` suelto en `src/` se saltaria esa proteccion
+    // (security-engineering, regla 8): solo ese fichero puede escribir en la consola.
+    files: ['api/src/**/*.ts'],
+    ignores: ['api/src/infra/registro.ts'],
+    // No vale volver a configurar `no-console`: con solo la severidad ESLint conserva las
+    // opciones del bloque general (`allow: ['error']`), y `allow` no admite una lista vacia.
+    // Ni basta con `console.*`: tambien se cierran `const c = console`, `const { error } =
+    // console`, `globalThis.console`, `process.stdout/stderr` y los imports de `console`
+    // (scripts/eslint-sin-console.test.mjs lo prueba con sondas). Quedan fuera
+    // `const { stderr } = process` y `require`: el repo es ESM y no hay otra salida a mano.
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        ...[
+          "Identifier[name='console']",
+          "MemberExpression[computed=true][property.value='console']",
+          "MemberExpression[object.name='process'][property.name=/^std(out|err)$/]",
+          "MemberExpression[object.name='process'][computed=true][property.value=/^std(out|err)$/]",
+          'ImportDeclaration[source.value=/^(node:)?console$/]',
+          'ImportExpression[source.value=/^(node:)?console$/]',
+        ].map((selector) => ({
+          selector,
+          message:
+            'Nada de console ni de stdout/stderr en la API: registra con `registrarEnConsola` (api/src/infra/registro.ts), que redacta cookies, autorizacion y contrasenas.',
+        })),
+      ],
+    },
+  },
+  {
     // Identidad visual (frontend-patterns): los colores se nombran por
     // significado en `estilos.css`, nunca por hex crudo en un componente.
     // Si esto salta, el color que falta es un token nuevo en `@theme`, no

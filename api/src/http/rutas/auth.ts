@@ -11,16 +11,11 @@ import {
 import { crearSesion, revocarSesion } from '../../auth/sesiones';
 import { COOKIE_SESION, leerTokenSesion } from '../../auth/cookie-sesion';
 import { requireSession } from '../../auth/middleware';
+import { crearErrorHttp, type ErrorConEstado } from '../errores';
 import { validarBody } from '../validar';
 
-interface ErrorConEstado extends Error {
-  status: number;
-}
-
 function credencialesInvalidas(): ErrorConEstado {
-  const error = new Error('Credenciales inválidas') as ErrorConEstado;
-  error.status = 401;
-  return error;
+  return crearErrorHttp(401, 'Credenciales inválidas');
 }
 
 export function crearRutasAuth(

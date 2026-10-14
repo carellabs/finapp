@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
+import { causaDeError, registrarEnConsola } from '../infra/registro';
+import { requestIdDe } from './request-id';
 
 export interface DetalleCampo {
   campo: string;
@@ -12,7 +13,7 @@ export interface DetalleCampo {
  * ruta, booleanos…), jamás valores de cabeceras ni datos del usuario.
  */
 export interface RegistroDeError {
-  /** Por defecto `error`. `warn` para un rechazo del cliente que conviene ver. */
+  /** Por defecto `warn` en un 4xx y `error` en un 5xx. */
   readonly nivel?: 'warn' | 'error';
   readonly campos?: Readonly<Record<string, string | number | boolean>>;
 }
@@ -32,6 +33,19 @@ function tieneEstadoHttp(error: unknown): error is ErrorConEstado {
   );
 }
 
+/**
+ * Los errores que ha creado `crearErrorHttp`: su mensaje lo escribió este código y es fijo
+ * ("No autenticado", "Origen no permitido"). El de cualquier otro error (body-parser, el
+ * driver de Postgres, Node) NO se puede dar por seguro: V8 mete un fragmento del cuerpo en
+ * el `SyntaxError` de un JSON mal formado, y un error de conexión lleva host y puerto.
+ */
+const conMensajeFijo = new WeakSet<object>();
+
+/** ¿Lo creó `crearErrorHttp`? Un objeto con el mismo aspecto (`status`, `message`) no vale. */
+function tieneMensajeFijo(error: unknown): error is ErrorConEstado {
+  return typeof error === 'object' && error !== null && conMensajeFijo.has(error);
+}
+
 /** Fábrica única de errores HTTP tipados: la usan tanto `validar.ts` como los casos de uso. */
 export function crearErrorHttp(
   status: number,
@@ -41,7 +55,32 @@ export function crearErrorHttp(
   const error = new Error(mensaje) as ErrorConEstado;
   error.status = status;
   if (detalles !== undefined) error.detalles = detalles;
+  conMensajeFijo.add(error);
   return error;
+}
+
+/** Línea de log de un error ajeno: ni su mensaje ni sus propiedades. */
+const MENSAJE_DE_ERROR_AJENO = 'error no controlado';
+
+/** Identificadores como los `type` de body-parser (`entity.parse.failed`, `charset.unsupported`). */
+const TIPO_DE_ERROR = /^[a-z]+(\.[a-z]+)*$/;
+const LONGITUD_MAXIMA_DEL_TIPO = 40;
+
+/**
+ * Qué se registra de un error que no creó `crearErrorHttp`: su tipo y su código (`causaDeError`) y,
+ * si tiene uno con forma de identificador, el `type` de body-parser. Nunca el mensaje.
+ */
+function descripcionDeErrorAjeno(error: unknown): Record<string, string> {
+  const tipo =
+    typeof error === 'object' && error !== null && 'type' in error ? error.type : undefined;
+  return {
+    ...causaDeError(error),
+    ...(typeof tipo === 'string' &&
+    tipo.length <= LONGITUD_MAXIMA_DEL_TIPO &&
+    TIPO_DE_ERROR.test(tipo)
+      ? { tipo }
+      : {}),
+  };
 }
 
 interface ErrorPostgres {
@@ -92,12 +131,17 @@ const CODIGOS_POR_ESTADO: Readonly<Record<number, string>> = {
 export const rutaNoEncontrada: RequestHandler = (_req, res) => {
   // Sin eco de la ruta pedida: no confirmamos que existe ni damos pistas del arbol.
   res.status(404).json({
-    error: { codigo: 'NO_ENCONTRADO', mensaje: 'Recurso no encontrado' },
+    error: {
+      codigo: 'NO_ENCONTRADO',
+      mensaje: 'Recurso no encontrado',
+      request_id: requestIdDe(res),
+    },
   });
 };
 
 export const manejadorErrores: ErrorRequestHandler = (errorSinTipar: unknown, _req, res, _next) => {
-  const requestId = randomUUID();
+  // El id de la petición (el de la cabecera `X-Request-Id`): jamás uno nuevo para un error.
+  const requestId = requestIdDe(res);
   // Express tipa el error del handler como `any`; se acota a `unknown` en la
   // primera línea para que el resto de la función quede bajo chequeo estricto.
   const errorOriginal: unknown = errorSinTipar;
@@ -114,21 +158,23 @@ export const manejadorErrores: ErrorRequestHandler = (errorSinTipar: unknown, _r
   const codigo = CODIGOS_POR_ESTADO[estado] ?? 'ERROR_INTERNO';
 
   // El detalle vive en el log; al cliente solo le llega un codigo y el request_id.
-  // Los campos del error van primero para que NO puedan pisar los cuatro de siempre.
-  const registro = tieneEstadoHttp(error) ? error.registro : undefined;
-  console.error(
-    JSON.stringify({
-      ...registro?.campos,
-      nivel: registro?.nivel ?? 'error',
-      request_id: requestId,
-      estado,
-      mensaje: error instanceof Error ? error.message : 'error desconocido',
-    }),
-  );
+  // Los campos del error van primero para que NO puedan pisar los cuatro de siempre. Solo un
+  // error de `crearErrorHttp` aporta su mensaje y su contexto de log: de cualquier otro se
+  // registra su tipo y su codigo (ver `conMensajeFijo`).
+  const fijo = tieneMensajeFijo(error);
+  const registro = fijo ? error.registro : undefined;
+  registrarEnConsola({
+    ...registro?.campos,
+    ...(fijo ? {} : descripcionDeErrorAjeno(error)),
+    nivel: registro?.nivel ?? (estado >= 500 ? 'error' : 'warn'),
+    request_id: requestId,
+    estado,
+    mensaje: fijo ? error.message : MENSAJE_DE_ERROR_AJENO,
+  });
 
   // `detalles` solo se expone en 4xx y solo si el propio código los generó
   // (p.ej. campo+motivo de Zod): nunca en un 500, nunca datos ajenos.
-  const detalles = estado !== 500 && tieneEstadoHttp(error) ? error.detalles : undefined;
+  const detalles = estado !== 500 && fijo ? error.detalles : undefined;
 
   res.status(estado).json({
     error: {

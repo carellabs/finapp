@@ -312,8 +312,9 @@ describe('el 403 no vuelca lo recibido', () => {
       expect(visible).not.toContain('valor-distintivo');
       expect((respuesta.body as CuerpoError).error.request_id).toEqual(expect.any(String));
     }
-    // Control positivo: el rechazo sí quedó registrado (el espía captura de verdad)…
-    expect(espia).toHaveBeenCalledTimes(2);
+    // Control positivo: el rechazo sí quedó registrado (el espía captura de verdad): por cada
+    // petición, la línea del error y la de acceso…
+    expect(espia).toHaveBeenCalledTimes(4);
     // …pero sin ningún valor recibido.
     expect(JSON.stringify(espia.mock.calls)).not.toContain('valor-distintivo');
     expect(JSON.stringify(espia.mock.calls)).toContain('403');
@@ -324,11 +325,14 @@ describe('el registro del 403', () => {
   const VALOR_ORIGIN = 'https://valor-distintivo-del-origen.example';
   const VALOR_SEC_FETCH_SITE = 'valor-distintivo-del-sec-fetch';
 
-  /** Líneas JSON que el manejador de errores escribió para un 403, ya parseadas. */
+  /**
+   * Líneas JSON que el manejador de errores escribió para un 403, ya parseadas. La de acceso
+   * (`mensaje: 'peticion'`, también con `estado: 403`) queda fuera: tiene su propio test.
+   */
   function lineasDeRechazo(espia: MockInstance): Record<string, unknown>[] {
     return espia.mock.calls
       .map((llamada) => JSON.parse(String(llamada[0])) as Record<string, unknown>)
-      .filter((linea) => linea.estado === PROHIBIDO);
+      .filter((linea) => linea.estado === PROHIBIDO && linea.mensaje !== 'peticion');
   }
 
   it.each<readonly [string, Cabeceras, boolean, boolean]>([
@@ -373,6 +377,24 @@ describe('el registro del 403', () => {
       expect(JSON.stringify(espia.mock.calls)).not.toContain('distintivo');
     },
   );
+
+  it('la ruta del rechazo es la saneada: sin consulta y con tope de 200 caracteres más la marca', async () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const respuesta = await enviar(
+      app,
+      'post',
+      `/api/v1/transacciones/${'x'.repeat(15_000)}?clave=valor-distintivo-de-consulta`,
+      { Origin: VALOR_ORIGIN },
+    );
+
+    expect(respuesta.status).toBe(PROHIBIDO);
+    const lineas = lineasDeRechazo(espia);
+    expect(lineas).toHaveLength(1);
+    expect(String(lineas[0]?.ruta)).toHaveLength(200 + '…[truncada]'.length);
+    expect(String(lineas[0]?.ruta).startsWith('/api/v1/transacciones/xxx')).toBe(true);
+    expect(JSON.stringify(espia.mock.calls)).not.toContain('distintivo');
+  });
 
   it('los campos del registro no salen en la respuesta', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);

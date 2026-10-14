@@ -10,6 +10,8 @@ import { manejadorErrores, rutaNoEncontrada } from './http/errores';
 import { crearClaveCliente } from './http/ip-cliente';
 import { alExcederElLimite } from './http/limite-excedido';
 import { verificarOrigen } from './http/origen';
+import { registrarAcceso } from './http/registro-acceso';
+import { asignarRequestId } from './http/request-id';
 import { crearRutasAuth } from './http/rutas/auth';
 import { crearRutasCategorias } from './http/rutas/categorias';
 import { crearRutasTransacciones } from './http/rutas/transacciones';
@@ -78,6 +80,12 @@ export function crearApp(
   // lo rechaza): cualquiera podria falsificar `X-Forwarded-For`.
   app.set('trust proxy', env.TRUST_PROXY);
   app.disable('x-powered-by');
+  // Lo PRIMERO de la cadena: asi llevan `X-Request-Id` y dejan linea de acceso tambien la
+  // peticion previa de CORS (que `cors` contesta por si mismo), los 403 de la comprobacion de
+  // origen, los 429, los 400/413/415 del lector del cuerpo y los 404. Un middleware mas abajo
+  // se saltaria todo lo que se responde antes de llegar a el.
+  app.use(asignarRequestId);
+  app.use(registrarAcceso());
   app.use(helmet());
   // `cors` va primero: responde por si mismo a la peticion previa (OPTIONS) de cualquier origen.
   app.use(cors({ origin: env.ORIGEN_FRONTEND, credentials: true }));

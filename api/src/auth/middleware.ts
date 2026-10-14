@@ -1,5 +1,6 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { Pool } from '../db/cliente';
+import { crearErrorHttp, type ErrorConEstado } from '../http/errores';
 import { leerTokenSesion } from './cookie-sesion';
 import { verificarSesion } from './sesiones';
 
@@ -9,14 +10,8 @@ declare module 'express-serve-static-core' {
   }
 }
 
-interface ErrorConEstado extends Error {
-  status: number;
-}
-
 function noAutenticado(): ErrorConEstado {
-  const error = new Error('No autenticado') as ErrorConEstado;
-  error.status = 401;
-  return error;
+  return crearErrorHttp(401, 'No autenticado');
 }
 
 /**

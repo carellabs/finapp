@@ -1926,6 +1926,145 @@ describe('dependabot.yml', () => {
     );
   });
 
+  /**
+   * Los servicios de un docker-compose.yml: `{ nombre: texto de su bloque }`.
+   * @param {string} compose
+   * @returns {Record<string, string>}
+   */
+  const serviciosDelCompose = (compose) => {
+    const lineas = compose.split('\n');
+    const inicio = lineas.findIndex((l) => l === 'services:');
+    assert.ok(inicio >= 0, 'el compose no tiene `services:`');
+    /** @type {Record<string, string>} */
+    const servicios = {};
+    let actual = null;
+    for (const l of lineas.slice(inicio + 1)) {
+      if (/^\S/.test(l)) break; // otra clave de primer nivel: fin de `services:`
+      const clave = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(l);
+      if (clave) {
+        actual = clave[1];
+        servicios[actual] = '';
+      } else if (actual) {
+        servicios[actual] += l + '\n';
+      }
+    }
+    return servicios;
+  };
+
+  /**
+   * El bloque de un ancla de primer nivel (`x-logging: &logging`), sin su cabecera.
+   * @param {string} compose
+   * @param {string} ancla
+   * @returns {string | undefined}
+   */
+  const bloqueDelAncla = (compose, ancla) => {
+    const lineas = compose.split('\n');
+    const inicio = lineas.findIndex((l) =>
+      new RegExp(`^x-[\\w-]+:\\s*&${ancla}\\s*(?:#.*)?$`).test(l),
+    );
+    if (inicio < 0) return undefined;
+    let bloque = '';
+    for (const l of lineas.slice(inicio + 1)) {
+      if (/^\S/.test(l)) break;
+      bloque += l + '\n';
+    }
+    return bloque;
+  };
+
+  /**
+   * Qué servicios del compose no rotan sus logs: sin `logging`, o con un `logging` (propio o
+   * el de un ancla `*nombre`) al que le falta `max-size` o `max-file`. Sin límite, el
+   * `json-file` de Docker crece hasta llenar el disco. Vacío: todos rotan.
+   * @param {string} compose
+   * @returns {string[]}
+   */
+  const serviciosSinRotacion = (compose) => {
+    const problemas = [];
+    for (const [nombre, bloque] of Object.entries(serviciosDelCompose(compose))) {
+      const logging = /^ {4}logging:[ \t]*(?:\*(\S+))?[ \t]*(?:#.*)?$/m.exec(bloque);
+      if (!logging) {
+        problemas.push(`${nombre}: sin \`logging\``);
+        continue;
+      }
+      const definicion = logging[1] === undefined ? bloque : bloqueDelAncla(compose, logging[1]);
+      if (definicion === undefined) {
+        problemas.push(`${nombre}: el ancla *${logging[1]} no existe`);
+        continue;
+      }
+      for (const opcion of ['max-size', 'max-file']) {
+        if (
+          !new RegExp(`^\\s+${opcion}:\\s*${Q}?[0-9]+[a-z]*${Q}?\\s*(?:#.*)?$`, 'm').test(
+            definicion,
+          )
+        ) {
+          problemas.push(`${nombre}: \`logging\` sin ${opcion}`);
+        }
+      }
+    }
+    return problemas;
+  };
+
+  test('el lector de logging del compose ve los servicios y detecta los que no rotan (control positivo)', () => {
+    const conAncla = [
+      'x-logging: &logging',
+      '  driver: json-file',
+      '  options:',
+      "    max-size: '10m'",
+      "    max-file: '3'",
+      '',
+      'services:',
+      '  a:',
+      '    image: x:1',
+      '    logging: *logging',
+      '  b:',
+      '    image: y:1',
+      '    logging:',
+      '      driver: json-file',
+      '      options:',
+      '        max-size: 5m',
+      '        max-file: 2',
+      '',
+      'volumes:',
+      '  datos:',
+      '',
+    ].join('\n');
+    assert.deepEqual(Object.keys(serviciosDelCompose(conAncla)), ['a', 'b']);
+    assert.deepEqual(serviciosSinRotacion(conAncla), []);
+
+    // Un servicio sin `logging`.
+    assert.deepEqual(serviciosSinRotacion(conAncla.replace('    logging: *logging\n', '')), [
+      'a: sin `logging`',
+    ]);
+    // Un ancla sin max-size, o sin max-file.
+    assert.deepEqual(serviciosSinRotacion(conAncla.replace("    max-size: '10m'\n", '')), [
+      'a: `logging` sin max-size',
+    ]);
+    assert.deepEqual(serviciosSinRotacion(conAncla.replace("    max-file: '3'\n", '')), [
+      'a: `logging` sin max-file',
+    ]);
+    // Un `logging` propio incompleto.
+    assert.deepEqual(serviciosSinRotacion(conAncla.replace('        max-size: 5m\n', '')), [
+      'b: `logging` sin max-size',
+    ]);
+    // Un alias a un ancla que no existe.
+    assert.deepEqual(serviciosSinRotacion(conAncla.replace('&logging', '&otro')), [
+      'a: el ancla *logging no existe',
+    ]);
+    // El tope no puede estar en una clave de otro servicio ni comentado.
+    assert.deepEqual(
+      serviciosSinRotacion(conAncla.replace("    max-size: '10m'", "    # max-size: '10m'")),
+      ['a: `logging` sin max-size'],
+    );
+  });
+
+  test('docker-compose.yml: TODOS los servicios rotan sus logs (logging con max-size y max-file)', () => {
+    const compose = read('docker-compose.yml');
+
+    // Control: el lector ve los tres servicios; si no, el test pasaría vacío.
+    assert.deepEqual(Object.keys(serviciosDelCompose(compose)), ['db', 'api', 'web']);
+    assert.deepEqual(serviciosSinRotacion(compose), []);
+  });
+
   test('la imagen de gitleaks no está en ningún fichero que Dependabot lea, y el repo lo dice junto a la constante y en la guía', () => {
     // Dependabot solo lee manifiestos (Dockerfile, docker-compose.yml, workflows...): una
     // constante de un .mjs no la sigue. Se sube a mano, y esto lo explican el comentario de

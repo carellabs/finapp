@@ -22,7 +22,7 @@ Modelo de amenazas: la app contiene el detalle completo de las finanzas personal
 5. **Zod en el borde de toda entrada.** Lo que no valida, no entra.
 6. **SQL siempre parametrizado.** Cero concatenación, sin excepciones.
 7. **Sin stack traces, rutas, versiones ni nombres de tabla en las respuestas.** Detalle al log, `codigo` + `request_id` al cliente.
-8. **Logs sin importes, sin descripciones y sin datos personales.** Los logs son un vector de fuga: Pino con `redact` configurado.
+8. **Logs sin importes, sin descripciones y sin datos personales.** Los logs son un vector de fuga: un único punto de salida (`registrarEnConsola`) que redacta por nombre de clave cookies, autorización, contraseñas e importes, y un `request_id` por petición para correlar (ver `references/controles.md`, «Logs»).
 9. **`npm audit`: vulnerabilidades altas o críticas bloquean el build.** Escaneo de secretos (gitleaks) en pre-commit y en CI **sobre el histórico completo** (`fetch-depth: 0`).
 10. **Un backup no restaurado no es un backup.** La restauración se prueba automáticamente, no se supone.
 

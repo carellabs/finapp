@@ -1,9 +1,14 @@
+import { serializarRegistro } from './redaccion';
+
 /**
- * Registro estructurado de eventos que no nacen de una petición HTTP (las
- * tareas periódicas). Una línea JSON por stderr, igual que el resto de la API.
+ * Registro estructurado de la API: una línea JSON por stderr. Es el ÚNICO sitio que
+ * escribe en el log (ESLint prohíbe `console` en el resto de `src/`), y todo pasa por
+ * `serializarRegistro`, que redacta por nombre de clave (cookies, autorización,
+ * contraseñas, importes…): la protección no depende de que quien registra se acuerde.
  *
- * Los campos son nombres de tarea, contadores y booleanos: jamás valores de
- * cabeceras, ids, tokens ni datos del usuario (security-engineering, regla 8).
+ * Aun así, los campos que se pasan son nombres de tarea, contadores y booleanos:
+ * jamás valores de cabeceras, ids, tokens ni datos del usuario (security-engineering,
+ * regla 8). La redacción es la red de seguridad, no el permiso para volcar.
  */
 export interface EventoRegistro {
   readonly nivel: 'info' | 'warn' | 'error';
@@ -28,5 +33,5 @@ export function causaDeError(error: unknown): Record<string, string> {
 }
 
 export const registrarEnConsola: Registrar = (evento) => {
-  console.error(JSON.stringify(evento));
+  console.error(serializarRegistro(evento));
 };

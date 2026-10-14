@@ -1,5 +1,6 @@
 import type { RequestHandler } from 'express';
 import { crearErrorHttp } from './errores';
+import { rutaDePeticion } from './ruta';
 
 /**
  * Segunda barrera anti-CSRF (la primera es `SameSite=Strict` en la cookie de
@@ -94,7 +95,7 @@ export function verificarOrigen(origenPermitido: string): RequestHandler {
       nivel: 'warn',
       campos: {
         metodo: req.method,
-        ruta: req.baseUrl + req.path,
+        ruta: rutaDePeticion(req.originalUrl),
         origen_presente: origin !== undefined,
         sec_fetch_site_presente: secFetchSite !== undefined,
       },
