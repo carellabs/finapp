@@ -8,8 +8,18 @@
 // falso verde.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { builtinModules } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join, dirname, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { evaluatePr, stripHtmlComments } from './pr-policy.mjs';
@@ -1199,6 +1209,249 @@ describe('guía de configuración de GitHub (references/github-setup.md)', () =>
   test('no contiene datos reales ni secretos: ni correos personales ni tokens', () => {
     assert.doesNotMatch(guia(), /gh[pousr]_[A-Za-z0-9]{20,}/);
     assert.doesNotMatch(guia(), /fabriziocarellas@/i);
+  });
+});
+
+// ───────────────────────────── @types/node en los workspaces ─────────────────────────────
+
+describe('workspaces: @types/node', () => {
+  /**
+   * Los módulos que importa un texto: `from 'x'`, `import 'x'`, `import('x')` y `require('x')`.
+   * No confunde una cadena suelta ni un comentario (de bloque o de línea entera) con una
+   * importación.
+   * @param {string} texto
+   * @returns {string[]}
+   */
+  const modulosImportados = (texto) =>
+    [
+      ...texto
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '')
+        .matchAll(/\b(?:from|import|require)\s*\(?\s*['"]([^'"]+)['"]/g),
+    ].map((m) => m[1]);
+
+  /**
+   * ¿Importa el texto un módulo `node:*`? No confunde `node-fetch` ni `./node:fs`.
+   * @param {string} texto
+   * @returns {boolean}
+   */
+  const importaNode = (texto) => modulosImportados(texto).some((m) => m.startsWith('node:'));
+
+  /**
+   * ¿Importa el texto un módulo nativo de Node, con o sin el prefijo `node:` (`fs`, `path`,
+   * `fs/promises`, `node:test`...)?
+   * @param {string} texto
+   * @returns {boolean}
+   */
+  const importaNativo = (texto) =>
+    modulosImportados(texto).some((m) => m.startsWith('node:') || builtinModules.includes(m));
+
+  /**
+   * Rutas de los ficheros de código bajo `dir`, en cualquier profundidad y sin `node_modules`.
+   * @param {string} dir
+   * @returns {string[]}
+   */
+  const ficheros = (dir) => {
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const ruta = join(dir, e.name);
+      if (e.isDirectory()) return e.name === 'node_modules' ? [] : ficheros(ruta);
+      return /\.(?:[cm]?[jt]s|[jt]sx)$/.test(e.name) ? [ruta] : [];
+    });
+  };
+
+  /**
+   * Los ficheros de `src` y `tests` de un workspace cuyo texto cumple `detector`.
+   * @param {string} raiz Ruta absoluta del workspace.
+   * @param {(texto: string) => boolean} detector
+   * @returns {string[]}
+   */
+  const ficherosQue = (raiz, detector) =>
+    ['src', 'tests']
+      .flatMap((d) => ficheros(join(raiz, d)))
+      .filter((f) => detector(readFileSync(f, 'utf8')));
+
+  /** Los ficheros de `src` y `tests` de un workspace que importan un módulo `node:*`. */
+  const queImportanNode = (raiz) => ficherosQue(raiz, importaNode);
+
+  /** Los ficheros de `src` y `tests` de un workspace que importan un módulo nativo de Node. */
+  const queImportanNativos = (raiz) => ficherosQue(raiz, importaNativo);
+
+  /** Ruta relativa a `raiz` con `/`, igual en Windows y en Linux. */
+  const relativa = (raiz, f) => relative(raiz, f).split(sep).join('/');
+
+  /** La mayor de una especificación semver (`^24`, `~24.19.2`, `24.21.0`); NaN si no la tiene. */
+  const mayorDe = (spec) => Number(/^[\^~]?(\d+)(?:\.|$)/.exec(spec ?? '')?.[1]);
+
+  /**
+   * Qué le falta a un workspace respecto a `@types/node`: si importa `node:*` tiene que
+   * declararlo en devDependencies, con la misma mayor que el Node de `.nvmrc`.
+   * @param {{ nombre: string, importadores: string[], devDependencies?: Record<string, string> }} ws
+   * @param {number} mayorNode
+   * @returns {string[]}
+   */
+  const problemas = ({ nombre, importadores, devDependencies = {} }, mayorNode) => {
+    if (importadores.length === 0) return [];
+    const spec = devDependencies['@types/node'];
+    const usa = `${nombre} importa node:* (${importadores.join(', ')})`;
+    if (spec === undefined) return [`${usa} y no declara @types/node en devDependencies`];
+    if (mayorDe(spec) !== mayorNode) {
+      return [`${nombre}: @types/node "${spec}" no es de la mayor ${mayorNode} de .nvmrc`];
+    }
+    return [];
+  };
+
+  test('el detector de `node:*` ve los cuatro modos de importar y no confunde nombres parecidos (control positivo)', () => {
+    for (const bueno of [
+      "import { readFileSync } from 'node:fs';",
+      'import {\n  join,\n} from "node:path";',
+      "import 'node:test';",
+      "const fs = await import('node:fs/promises');",
+      "const os = require('node:os');",
+    ]) {
+      assert.equal(importaNode(bueno), true, bueno);
+    }
+    for (const malo of [
+      "import fetch from 'node-fetch';",
+      "import { x } from './node:fs';",
+      "// usa node:fs para leer el CSS\nconst a = 'node:fs';",
+      "import { y } from 'nodemailer';",
+    ]) {
+      assert.equal(importaNode(malo), false, malo);
+    }
+  });
+
+  test('el detector de módulos nativos ve también los de sin prefijo y los subpaths, y no confunde paquetes ni rutas (control positivo)', () => {
+    for (const bueno of [
+      "import { join } from 'path';",
+      "import { readFile } from 'fs/promises';",
+      "import { createHash } from 'crypto';",
+      "export * from 'node:fs';",
+      "const os = require('os');",
+      "import 'node:test';",
+    ]) {
+      assert.equal(importaNativo(bueno), true, bueno);
+    }
+    for (const malo of [
+      "import { z } from 'zod';",
+      "import fc from 'fast-check';",
+      "import { x } from './path';",
+      "import { y } from '../fs/ayudas';",
+      "import p from 'path-to-regexp';",
+      "// import { join } from 'path';\nconst a = 'path';",
+      "/* import { join } from 'path';\n   require('fs'); */\nconst b = 1;",
+    ]) {
+      assert.equal(importaNativo(malo), false, malo);
+    }
+  });
+
+  test('el recorrido mira src y tests a cualquier profundidad y deja fuera node_modules y lo demás (control positivo)', () => {
+    const raiz = mkdtempSync(join(tmpdir(), 'tipos-node-'));
+    try {
+      const pon = (rel, texto) => {
+        mkdirSync(dirname(join(raiz, rel)), { recursive: true });
+        writeFileSync(join(raiz, rel), texto);
+      };
+      pon('src/a.ts', "import { join } from 'node:path';\n");
+      pon('src/limpio.ts', "import { x } from './a';\n");
+      pon('tests/hondo/b.test.tsx', "import 'node:test';\n");
+      pon('tests/node_modules/pkg/c.ts', "import 'node:fs';\n");
+      pon('otro/d.ts', "import 'node:fs';\n");
+      pon('src/estilos.css', "@import 'node:fs';\n");
+      assert.deepEqual(
+        queImportanNode(raiz)
+          .map((f) => relativa(raiz, f))
+          .sort(),
+        ['src/a.ts', 'tests/hondo/b.test.tsx'],
+      );
+      assert.deepEqual(queImportanNode(join(raiz, 'no-existe')), []);
+      // Y el de nativos suma los de sin prefijo (`path`) que el de `node:*` no ve.
+      pon('tests/c.test.ts', "import { join } from 'path';\n");
+      pon('src/zod.ts', "import { z } from 'zod';\n");
+      assert.deepEqual(
+        queImportanNativos(raiz)
+          .map((f) => relativa(raiz, f))
+          .sort(),
+        ['src/a.ts', 'tests/c.test.ts', 'tests/hondo/b.test.tsx'],
+      );
+    } finally {
+      rmSync(raiz, { recursive: true, force: true });
+    }
+  });
+
+  test('la comprobación exige @types/node en devDependencies y con la mayor de .nvmrc solo a quien importa node:* (control positivo)', () => {
+    const importa = ['tests/x.test.ts'];
+    assert.deepEqual(
+      problemas(
+        { nombre: 'w', importadores: importa, devDependencies: { '@types/node': '^24' } },
+        24,
+      ),
+      [],
+    );
+    assert.deepEqual(
+      problemas(
+        { nombre: 'w', importadores: importa, devDependencies: { '@types/node': '~24.19.2' } },
+        24,
+      ),
+      [],
+    );
+    assert.match(
+      problemas({ nombre: 'w', importadores: importa }, 24)[0] ?? '',
+      /w importa node:\* \(tests\/x\.test\.ts\) y no declara @types\/node/,
+    );
+    assert.match(
+      problemas(
+        { nombre: 'w', importadores: importa, devDependencies: { '@types/node': '^22' } },
+        24,
+      )[0] ?? '',
+      /"\^22" no es de la mayor 24/,
+    );
+    assert.match(
+      problemas(
+        { nombre: 'w', importadores: importa, devDependencies: { '@types/node': '*' } },
+        24,
+      )[0] ?? '',
+      /"\*" no es de la mayor 24/,
+    );
+    // Quien no importa node:* no está obligado a nada.
+    assert.deepEqual(problemas({ nombre: 'w', importadores: [] }, 24), []);
+  });
+
+  test('todo workspace que importa node:* en src o tests declara @types/node en devDependencies, de la mayor de .nvmrc', () => {
+    const mayorNode = Number(read('.nvmrc').trim().split('.')[0]);
+    const nombres = JSON.parse(read('package.json')).workspaces;
+    assert.ok(nombres.length >= 3, `solo ${nombres.length} workspaces: ${nombres}`);
+    const usan = [];
+    const fallos = nombres.flatMap((w) => {
+      const importadores = queImportanNode(join(ROOT, w)).map((f) => relativa(join(ROOT, w), f));
+      if (importadores.length > 0) usan.push(w);
+      const { devDependencies } = JSON.parse(read(`${w}/package.json`));
+      return problemas({ nombre: w, importadores, devDependencies }, mayorNode);
+    });
+    // Control positivo: el recorrido ve de verdad el código del repositorio (api lo usa), así
+    // que la comprobación no puede dar verde por no haber mirado nada.
+    assert.ok(usan.includes('api'), `ningún workspace usa node:* (${usan})`);
+    assert.deepEqual(fallos, []);
+  });
+
+  test('shared es dominio puro: ni src ni tests importan módulos de Node, y no declara @types/node', () => {
+    // AGENTS.md: «shared/ @finapp/shared — dominio puro. Sin BD, sin HTTP, sin React.» y
+    // «Si una función de dominio necesita la base de datos, le falta un parámetro.» Un módulo de
+    // Node (fs, path, crypto, http...) es justo lo que no puede entrar ahí. Sus tipos tampoco se
+    // declaran: lo único que carga Node en shared es `vitest.config.ts`, a través de vitest.
+    const raiz = join(ROOT, 'shared');
+    const { devDependencies = {}, dependencies = {} } = JSON.parse(read('shared/package.json'));
+    // Control positivo: el recorrido ve el código de shared (si no, un directorio mal escrito
+    // daría verde) y el detector es el de nativos, no solo el de `node:*`.
+    assert.ok(ficheros(join(raiz, 'src')).length > 0, 'shared/src está vacío o no existe');
+    assert.ok(ficheros(join(raiz, 'tests')).length > 0, 'shared/tests está vacío o no existe');
+    assert.deepEqual(
+      queImportanNativos(raiz).map((f) => relativa(raiz, f)),
+      [],
+      'shared importa módulos de Node: es dominio puro (AGENTS.md)',
+    );
+    assert.equal(devDependencies['@types/node'], undefined, 'shared declara @types/node');
+    assert.equal(dependencies['@types/node'], undefined, 'shared declara @types/node');
   });
 });
 

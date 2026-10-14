@@ -20,6 +20,8 @@ function entorno(
 ): NodeJS.ProcessEnv {
   return {
     ...BASE,
+    // En producción el origen del frontend tiene que ser https.
+    ...(nodeEnv === 'production' ? { ORIGEN_FRONTEND: 'https://finanzas.example.com' } : {}),
     NODE_ENV: nodeEnv,
     ...(trustProxy === undefined ? {} : { TRUST_PROXY: trustProxy }),
   };
