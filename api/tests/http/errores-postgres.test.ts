@@ -27,6 +27,17 @@ describe('traducirErrorPostgres', () => {
     expect(error?.status).toBe(409);
   });
 
+  it('traduce una espera de bloqueo agotada (55P03, lock_timeout) a 409: el cliente puede reintentar', () => {
+    const error = traducirErrorPostgres({
+      code: '55P03',
+      message: 'canceling statement due to lock timeout',
+    });
+
+    expect(error?.status).toBe(409);
+    // Sin el texto de Postgres ni pistas del esquema.
+    expect(error?.message).not.toMatch(/lock timeout|canceling|statement/i);
+  });
+
   it('devuelve null para un código de error no reconocido', () => {
     expect(traducirErrorPostgres({ code: '99999' })).toBeNull();
   });

@@ -29,7 +29,7 @@ Código por estado (lo fija el manejador central, `api/src/http/errores.ts`; el 
 | 401 | `NO_AUTENTICADO` | sin sesión o sesión caducada |
 | 403 | `ORIGEN_NO_PERMITIDO` | escritura que no declara salir del frontend (ver abajo) |
 | 404 | `NO_ENCONTRADO` | recurso o ruta inexistente |
-| 409 | `CONFLICTO` | violación de constraint (FK, unique) |
+| 409 | `CONFLICTO` | violación de constraint (FK, unique), o una operación concurrente retuvo un bloqueo más de 5 s (`lock_timeout`): el cliente puede reintentar |
 | 413 | `PAYLOAD_DEMASIADO_GRANDE` | cuerpo por encima del límite |
 | 415 | `TIPO_NO_SOPORTADO` | `Content-Encoding` o `charset` que el lector del cuerpo no soporta |
 | 422 | `VALIDACION_FALLIDA` | Zod, con `detalles` |
@@ -56,7 +56,7 @@ El `403` no repite lo recibido: ni en el cuerpo ni en el log. El log del rechazo
 
 | Método | Ruta | Notas |
 |---|---|---|
-| `POST` | `/api/v1/auth/login` | rate limit agresivo + bloqueo tras N fallos |
+| `POST` | `/api/v1/auth/login` | rate limit agresivo + bloqueo tras N fallos. Rota: revoca la sesión de la cookie `sid` previa si es del mismo usuario y se autentica bien. Deja como mucho `MAX_SESIONES_POR_USUARIO` sesiones (borra las más antiguas) |
 | `POST` | `/api/v1/auth/logout` | revoca la sesión en BD |
 | `GET` | `/api/v1/categorias` | lista activa; nunca hardcodeada en el cliente |
 | `GET` | `/api/v1/meses` | meses con datos + flag `cerrado` |

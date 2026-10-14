@@ -20,6 +20,8 @@ export default defineConfig({
         // ficheros (p.ej. `normalizar()` en transacciones.ts) igualmente
         // tiene su propio test unitario; solo no cuenta para el % del archivo.
         'src/auth/sesiones.ts',
+        'src/auth/purga-sesiones.ts',
+        'src/db/transaccion.ts',
         'src/auth/bloqueo.ts',
         'src/auth/middleware.ts',
         'src/http/rutas/**',

@@ -55,7 +55,7 @@ function esErrorPostgres(error: unknown): error is ErrorPostgres {
 /**
  * Traduce un error de `pg` a un error HTTP con código semántico, nunca el
  * error crudo de Postgres (api-conventions: 409 en violación de constraint).
- * Devuelve `null` si el error no es uno de estos dos casos conocidos.
+ * Devuelve `null` si el error no es uno de estos casos conocidos.
  */
 export function traducirErrorPostgres(error: unknown): ErrorConEstado | null {
   if (!esErrorPostgres(error)) return null;
@@ -65,6 +65,12 @@ export function traducirErrorPostgres(error: unknown): ErrorConEstado | null {
   }
   if (error.code === '23505') {
     return crearErrorHttp(409, 'Ya existe un registro con ese valor único');
+  }
+  // lock_timeout: otra transacción retuvo un bloqueo más de LOCK_TIMEOUT_MS. Es un conflicto
+  // con una operación concurrente que el cliente puede resolver reintentando. Un 5xx se
+  // reservaría para fallos del servidor, y este manejador solo emite 4xx específicos.
+  if (error.code === '55P03') {
+    return crearErrorHttp(409, 'Recurso ocupado por otra operación');
   }
   return null;
 }

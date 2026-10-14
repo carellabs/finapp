@@ -1,20 +1,13 @@
-import { crearApp } from './app';
 import { cargarEnv } from './config/env';
-import { crearPool } from './db/cliente';
+import { arrancar } from './servidor';
 
-const env = cargarEnv();
-const pool = crearPool(env.DATABASE_URL);
-const app = crearApp(env, pool);
+// Solo cablea el proceso: toda la lógica de arranque y apagado vive en `servidor.ts`,
+// donde los tests la alcanzan.
+const { apagar } = arrancar(cargarEnv());
 
-const servidor = app.listen(env.PORT, () => {
-  console.error(JSON.stringify({ nivel: 'info', mensaje: 'api escuchando', puerto: env.PORT }));
-});
+const salir = (): void => {
+  void apagar().then(() => process.exit(0));
+};
 
-async function apagar(): Promise<void> {
-  servidor.close();
-  await pool.end();
-  process.exit(0);
-}
-
-process.on('SIGTERM', () => void apagar());
-process.on('SIGINT', () => void apagar());
+process.on('SIGTERM', salir);
+process.on('SIGINT', salir);
