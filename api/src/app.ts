@@ -96,7 +96,10 @@ export function crearApp(
 
   app.use('/api/v1', limiteGlobal);
   app.use('/api/v1/auth/login', limiteLogin);
-  app.use('/api/v1/auth', crearRutasAuth(pool, env.NODE_ENV === 'production'));
+  app.use(
+    '/api/v1/auth',
+    crearRutasAuth(pool, env.NODE_ENV === 'production', env.MAX_SESIONES_POR_USUARIO),
+  );
 
   // Todo lo que cuelga de /api/v1 a partir de aqui exige sesion (api-conventions
   // Hard Rule 8). Los routers anteriores (auth) ya respondieron a sus rutas y

@@ -1,5 +1,6 @@
 import { cents, type ActualizarPrestamoEntrada, type NuevoPrestamoEntrada } from '@finapp/shared';
 import type { Pool } from '../db/cliente';
+import { enTransaccion } from '../db/transaccion';
 import { centsANumeric, type FilaTransaccion } from './mappers';
 
 export interface FilaPrestamo {
@@ -115,10 +116,7 @@ export async function ejecutarMarcarIncobrable(
   prestamoId: string,
   gasto: GastoIncobrable,
 ): Promise<{ prestamo: FilaPrestamo; transaccion: FilaTransaccion } | null> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
+  return enTransaccion(pool, async (client) => {
     const { rows: filasPrestamo } = await client.query<FilaPrestamo>(
       `UPDATE prestamos SET estado = 'incobrable'
        WHERE id = $1 AND estado != 'incobrable'
@@ -126,10 +124,8 @@ export async function ejecutarMarcarIncobrable(
       [prestamoId],
     );
     const prestamo = filasPrestamo[0];
-    if (prestamo === undefined) {
-      await client.query('ROLLBACK');
-      return null;
-    }
+    // Nada que deshacer: no hubo ninguna escritura.
+    if (prestamo === undefined) return null;
 
     const { rows: filasTransaccion } = await client.query<FilaTransaccion>(
       `INSERT INTO transacciones
@@ -151,12 +147,6 @@ export async function ejecutarMarcarIncobrable(
       throw new Error('INSERT del gasto de write-off no devolvio fila');
     }
 
-    await client.query('COMMIT');
     return { prestamo, transaccion };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
+  });
 }

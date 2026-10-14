@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { crearPool } from '../src/db/cliente';
+import type { EventoRegistro } from '../src/infra/registro';
 
 /** `getTypeParser` está tipado como `any` en `pg`: lo acotamos aquí. */
 type Parser = (valor: string) => unknown;
@@ -35,6 +36,26 @@ describe('crearPool', () => {
     const pool = crearPool('postgresql://finapp:clave@127.0.0.1:1/finapp');
 
     expect(pool.totalCount).toBe(0);
+    await pool.end();
+  });
+
+  it('el error de un cliente ocioso se registra y no tumba el proceso', async () => {
+    // Si la base de datos se reinicia, los clientes ociosos del pool emiten `error`; un
+    // `EventEmitter` sin escuchador lo relanza y el proceso muere.
+    const eventos: EventoRegistro[] = [];
+    const pool = crearPool('postgresql://finapp:clave@127.0.0.1:1/finapp', (e) => eventos.push(e));
+    const error = Object.assign(new Error('terminating connection (clave secreta de ejemplo)'), {
+      code: '57P01',
+    });
+
+    expect(() => pool.emit('error', error)).not.toThrow();
+
+    expect(eventos).toEqual([
+      expect.objectContaining({ nivel: 'error', error: 'Error', codigo: '57P01' }),
+    ]);
+    // Sin datos sensibles: ni el mensaje ni la URL de conexión.
+    expect(JSON.stringify(eventos)).not.toContain('secreta');
+    expect(JSON.stringify(eventos)).not.toContain('clave');
     await pool.end();
   });
 });

@@ -9,7 +9,8 @@ import {
   reiniciarIntentosFallidos,
 } from '../../auth/bloqueo';
 import { crearSesion, revocarSesion } from '../../auth/sesiones';
-import { COOKIE_SESION, requireSession } from '../../auth/middleware';
+import { COOKIE_SESION, leerTokenSesion } from '../../auth/cookie-sesion';
+import { requireSession } from '../../auth/middleware';
 import { validarBody } from '../validar';
 
 interface ErrorConEstado extends Error {
@@ -22,11 +23,16 @@ function credencialesInvalidas(): ErrorConEstado {
   return error;
 }
 
-export function crearRutasAuth(pool: Pool, cookiesSeguras: boolean): Router {
+export function crearRutasAuth(
+  pool: Pool,
+  cookiesSeguras: boolean,
+  maxSesionesPorUsuario: number,
+): Router {
   const router = Router();
 
   router.post('/login', validarBody(zLogin), (req, res, next) => {
     const { nombreUsuario, password } = req.body as { nombreUsuario: string; password: string };
+    const tokenPrevio = leerTokenSesion(req);
 
     void (async () => {
       const usuario = await buscarUsuarioPorNombre(pool, nombreUsuario);
@@ -44,7 +50,12 @@ export function crearRutasAuth(pool: Pool, cookiesSeguras: boolean): Router {
       }
 
       await reiniciarIntentosFallidos(pool, usuario.id);
-      const sesion = await crearSesion(pool, usuario.id);
+      // Rotación: la sesión con la que llega el navegador se revoca al crear la nueva.
+      // Solo aquí, tras autenticar: un intento fallido no revoca nada.
+      const sesion = await crearSesion(pool, usuario.id, {
+        maxSesiones: maxSesionesPorUsuario,
+        tokenPrevio,
+      });
 
       res.cookie(COOKIE_SESION, sesion.token, {
         httpOnly: true,
@@ -70,7 +81,7 @@ export function crearRutasAuth(pool: Pool, cookiesSeguras: boolean): Router {
   });
 
   router.post('/logout', (req, res, next) => {
-    const token = (req.cookies as Record<string, string | undefined> | undefined)?.[COOKIE_SESION];
+    const token = leerTokenSesion(req);
 
     void (async () => {
       if (token !== undefined) {

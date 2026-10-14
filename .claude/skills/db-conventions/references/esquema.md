@@ -78,6 +78,14 @@ Serie temporal del ahorro declarado (no inferido). `configuracion` clave-valor c
 
 `password_hash` (Argon2id) y `token_hash`: nunca el token en claro, para que leer la tabla no permita suplantar una sesión. `intentos_fallidos` y `bloqueado_hasta` viven en la BD para que **reiniciar el proceso no borre un bloqueo por fuerza bruta**.
 
+Índices de `sesiones` y quién los usa (medido con 5.000 sesiones sembradas, 1.000 usuarios, ~1 % caducadas; sin índice nuevo, la purga, el límite y la rotación ya los usan):
+
+| Índice | Sostiene |
+|---|---|
+| `sesiones_token_hash_key` (único) | verificar una sesión en cada petición y revocar la previa en el login |
+| `sesiones_expiracion` | la purga (`DELETE … WHERE expira_en <= now()`): Index Scan, 0,2 ms |
+| `sesiones_usuario` | la poda del límite por usuario: Bitmap Index Scan y un sort de como mucho N+1 filas, 0,5 ms. Un `(usuario_id, created_at)` no aporta nada: un usuario nunca tiene más de N (≤ 50) sesiones. |
+
 ## Los dos bugs que el esquema impide (§10), con test
 
 - **`NUMERIC(12,2)` y no `float`:** `sum()` de 0,10 + 0,20 devuelve exactamente `'0.30'`. El parser de `pg` está configurado para devolver `NUMERIC` como **string**; convertirlo a `number` reintroduce el error de coma flotante.

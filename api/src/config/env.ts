@@ -21,6 +21,29 @@ function esOrigenExacto(valor: string): boolean {
   }
 }
 
+/**
+ * Entero decimal en [min, max]. Sin definir, vacío o solo espacios vale `defecto`:
+ * el compose de desarrollo pasa `${VAR:-}` (vacío) cuando la variable no está en
+ * `.env`, y eso tiene que significar "el valor por defecto", no un error.
+ *
+ * Solo dígitos: `z.coerce.number()` aceptaría también `1e1`, `0x10` o ` 7`, y un
+ * valor así de raro casi siempre es un error de quien despliega. El mensaje
+ * nombra el rango, nunca el valor recibido.
+ */
+function enteroDecimal(min: number, max: number, defecto: number) {
+  const motivo = `debe ser un entero decimal entre ${min} y ${max}`;
+  return z.preprocess(
+    (valor) => (typeof valor === 'string' && valor.trim() === '' ? undefined : valor),
+    z
+      .string()
+      .trim()
+      .regex(/^\d+$/, motivo)
+      .transform(Number)
+      .pipe(z.number().min(min, motivo).max(max, motivo))
+      .default(defecto),
+  );
+}
+
 // Nombra la variable, NUNCA el valor recibido (cargarEnv no vuelca valores).
 const MOTIVO_ORIGEN_FRONTEND =
   'debe ser un origen exacto: esquema http o https, host en minusculas y puerto solo si no es el de por defecto, sin barra final, ruta, consulta ni credenciales';
@@ -43,6 +66,12 @@ const esquemaEnv = z
       .refine(esOrigenExacto, MOTIVO_ORIGEN_FRONTEND),
     // En crudo; se interpreta abajo porque la regla depende de NODE_ENV.
     TRUST_PROXY: z.string().optional(),
+    // Al iniciar sesión se borran las más antiguas hasta quedar en este número.
+    // Personal: móvil, portátil, tablet y algún navegador más.
+    MAX_SESIONES_POR_USUARIO: enteroDecimal(1, 50, 5),
+    // Cada cuánto se purgan las sesiones caducadas. Ya no autentican (se
+    // comprueba `expira_en` en cada petición): purgar es solo higiene de la tabla.
+    PURGA_SESIONES_INTERVALO_MINUTOS: enteroDecimal(1, 1440, 60),
   })
   .transform((datos, ctx) => {
     const enProduccion = datos.NODE_ENV === 'production';

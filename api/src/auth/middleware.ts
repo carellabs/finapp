@@ -1,8 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { Pool } from '../db/cliente';
+import { leerTokenSesion } from './cookie-sesion';
 import { verificarSesion } from './sesiones';
-
-export const COOKIE_SESION = 'sid';
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -26,7 +25,7 @@ function noAutenticado(): ErrorConEstado {
  */
 export function requireSession(pool: Pool): RequestHandler {
   return (req: Request, _res: Response, next: NextFunction) => {
-    const token = (req.cookies as Record<string, string | undefined> | undefined)?.[COOKIE_SESION];
+    const token = leerTokenSesion(req);
     if (token === undefined) {
       next(noAutenticado());
       return;
