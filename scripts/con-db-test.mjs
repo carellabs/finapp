@@ -11,7 +11,10 @@
 import { randomBytes } from 'node:crypto';
 import { lanzar } from './procesos.mjs';
 
-const IMAGEN = 'postgres:16-alpine';
+// Tiene que ser EXACTAMENTE la imagen de `db` en docker-compose.yml (la que vigila Dependabot):
+// un test de .github/scripts/repo-config.test.mjs lo comprueba. Si Dependabot sube la del compose,
+// este valor se iguala a mano.
+const IMAGEN = 'postgres:16.15-alpine';
 const PUERTO = process.env.PUERTO_DB_TEST ?? '55433';
 // El nombre lleva el puerto: dos ejecuciones en paralelo (cada una con su PUERTO_DB_TEST) no
 // pueden destruirse el contenedor entre si. Con el mismo puerto SI comparten nombre, y es lo

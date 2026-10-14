@@ -689,12 +689,28 @@ describe('pr-policy.yml: privilegio mínimo', () => {
     assert.match(job, /GH_REPO:\s*\$\{\{\s*github\.repository\s*\}\}/);
   });
 
-  test('el título y el cuerpo del PR solo llegan al script por `env:`', () => {
+  test('el título, el cuerpo y el autor (login y tipo) del PR solo llegan al script por `env:`', () => {
     const job = jobsOf(text())['pr-policy'];
-    const run = job.slice(job.indexOf('run: node'));
-    assert.doesNotMatch(run.split('\n')[0], /\$\{\{/);
-    assert.match(job, /PR_TITLE:\s*\$\{\{\s*github\.event\.pull_request\.title\s*\}\}/);
-    assert.match(job, /PR_BODY:\s*\$\{\{\s*github\.event\.pull_request\.body\s*\}\}/);
+    const paso = stepsOf(job).find((s) => /^\s+id:\s*policy\s*$/m.test(s));
+    assert.ok(paso, 'no se encontró el paso con id: policy');
+    // Las variables del bloque `env:` del paso, tal cual (clave -> expresión).
+    const env = /^ {8}env:\s*\n((?: {10}\S.*\n)+)/m.exec(paso)?.[1] ?? '';
+    const variables = Object.fromEntries(
+      [...env.matchAll(/^ {10}(\w+):\s*(.+?)\s*$/gm)].map((m) => [m[1], m[2]]),
+    );
+    assert.deepEqual(variables, {
+      PR_TITLE: '${{ github.event.pull_request.title }}',
+      PR_BODY: '${{ github.event.pull_request.body }}',
+      // La exención de longitud de Dependabot exige los dos: el login Y el tipo.
+      PR_AUTHOR_LOGIN: '${{ github.event.pull_request.user.login }}',
+      PR_AUTHOR_TYPE: '${{ github.event.pull_request.user.type }}',
+    });
+    // Y ninguna expresión dentro del `run:` (control positivo: el detector ve una).
+    const interpola = (linea) => /\$\{\{/.test(linea);
+    assert.equal(interpola('run: node x.mjs ${{ github.event.pull_request.title }}'), true);
+    const run = /^\s+run:.*$/m.exec(paso)?.[0] ?? '';
+    assert.match(run, /node \.github\/scripts\/pr-policy\.mjs/);
+    assert.equal(interpola(run), false, run);
   });
 
   test('la lista cerrada de etiquetas de `label` es exactamente la que produce pr-policy.mjs', () => {
@@ -1536,6 +1552,9 @@ describe('dependabot.yml', () => {
     eslint: ['eslint', '@eslint/js'],
   };
 
+  /** Nombre del grupo genérico de los ecosistemas cuyo grupo no se llama como ellos. */
+  const NOMBRE_GENERICO = { 'github-actions': 'actions', 'docker-compose': 'compose' };
+
   /** Dependencias directas de los cuatro package.json: `{ nombre -> manifiesto }`. */
   const directas = () => {
     const out = new Map();
@@ -1548,6 +1567,96 @@ describe('dependabot.yml', () => {
     }
     return out;
   };
+
+  /**
+   * El título de un PR de grupo con varias actualizaciones, como lo escribe Dependabot
+   * (dependabot-core, `MessageBuilder#grouped_directory_name`): cuenta los directorios de la
+   * entrada («across 1 directory» / «across 2 directories») y las actualizaciones.
+   * Ejemplo real, PR #9: «chore(deps): bump the vitest group across 1 directory with 2 updates».
+   * @param {{ prefix: string, grupo: string, actualizaciones: number, directorios?: number }} datos
+   * @returns {string}
+   */
+  const tituloDeGrupo = ({ prefix, grupo, actualizaciones, directorios = 1 }) =>
+    `${prefix}: bump the ${grupo} group across ${directorios} ${directorios === 1 ? 'directory' : 'directories'} with ${actualizaciones} update${actualizaciones === 1 ? '' : 's'}`;
+
+  /**
+   * El título de un PR de grupo con UNA sola actualización (dependabot-core,
+   * `MessageBuilder#grouped_directory_name`, rama `dependencies.one?`): el de una actualización
+   * suelta, con el directorio si no es la raíz, más «in the G group across N directory» (aquí
+   * `directory` va siempre en singular, sea cual sea N). Está leído del código de Dependabot: aún
+   * no hay un PR real de esta forma con el que contrastarlo.
+   * @param {{ prefix: string, nombre: string, desde: string, hasta: string, grupo: string, directory?: string, directorios?: number }} datos
+   * @returns {string}
+   */
+  const tituloDeUna = ({ prefix, nombre, desde, hasta, grupo, directory = '/', directorios = 1 }) =>
+    `${prefix}: bump ${nombre} from ${desde} to ${hasta}${directory === '/' ? '' : ` in ${directory}`} in the ${grupo} group across ${directorios} directory`;
+
+  /** El autor de los PR de Dependabot, como lo entrega GitHub: login Y tipo. */
+  const DEPENDABOT = { login: 'dependabot[bot]', type: 'Bot' };
+
+  /** La política de PR aplicada a un título como si lo hubiera abierto Dependabot. */
+  const comoDependabot = (title) => evaluatePr({ title, body: '', author: DEPENDABOT });
+
+  test('el título de un PR de grupo reproduce el PR #9 real y cuenta directorios y actualizaciones (control positivo)', () => {
+    assert.equal(
+      tituloDeGrupo({ prefix: 'chore(deps)', grupo: 'vitest', actualizaciones: 2 }),
+      'chore(deps): bump the vitest group across 1 directory with 2 updates',
+    );
+    assert.equal(
+      tituloDeGrupo({ prefix: 'ci(deps)', grupo: 'actions', actualizaciones: 1, directorios: 2 }),
+      'ci(deps): bump the actions group across 2 directories with 1 update',
+    );
+    // Y el formato real es más largo que el antiguo («with N updates» a secas).
+    assert.equal(
+      tituloDeGrupo({ prefix: 'chore(deps)', grupo: 'npm', actualizaciones: 100 }).length,
+      'chore(deps): bump the npm group with 100 updates'.length + ' across 1 directory'.length,
+    );
+    // Una sola actualización: la suelta más «in the G group across 1 directory».
+    assert.equal(
+      tituloDeUna({
+        prefix: 'chore(deps)',
+        nombre: 'vitest',
+        desde: '4.1.9',
+        hasta: '4.1.10',
+        grupo: 'vitest',
+      }),
+      'chore(deps): bump vitest from 4.1.9 to 4.1.10 in the vitest group across 1 directory',
+    );
+    assert.equal(
+      tituloDeUna({
+        prefix: 'build(deps)',
+        nombre: 'node',
+        desde: '24.21.0-alpine',
+        hasta: '24.22.0-alpine',
+        grupo: 'docker',
+        directory: '/docker',
+      }),
+      'build(deps): bump node from 24.21.0-alpine to 24.22.0-alpine in /docker in the docker group across 1 directory',
+    );
+  });
+
+  test('la política exime a Dependabot de la longitud del título, pero no del formato (control positivo)', () => {
+    // Un nombre de 67 caracteres: el título pasa de 100 y solo lo puede abrir Dependabot.
+    const largo = tituloDeUna({
+      prefix: 'chore(deps)',
+      nombre: '@scope/' + 'x'.repeat(60),
+      desde: '1.0.0',
+      hasta: '1.0.1',
+      grupo: 'npm',
+    });
+    assert.ok(Array.from(largo).length > 100, `solo mide ${largo.length}`);
+    assert.equal(comoDependabot(largo).ok, true, largo);
+    assert.equal(
+      evaluatePr({ title: largo, body: '', author: { login: 'carellabs', type: 'User' } }).ok,
+      false,
+      'una persona no puede abrir un PR de más de 100 caracteres',
+    );
+    // El formato convencional se le sigue exigiendo: un prefijo mal escrito falla.
+    for (const prefix of ['Chore(deps)', 'chore(Deps)', 'deps', '']) {
+      const mal = tituloDeGrupo({ prefix, grupo: 'npm', actualizaciones: 2 });
+      assert.equal(comoDependabot(mal).ok, false, mal);
+    }
+  });
 
   test('el lector de grupos respeta el orden del fichero y lee listas partidas en varias líneas (control positivo)', () => {
     const yaml = [
@@ -1579,15 +1688,22 @@ describe('dependabot.yml', () => {
     assert.equal(asignar(grupos(yaml), '@yy/z', 'major'), undefined, '`@y/*` no encaja con @yy/z');
   });
 
-  test('cubre npm (/), github-actions (/) y docker (/docker), con prefijo convencional y etiqueta type:chore', () => {
+  test('cubre npm (/), github-actions (/), docker (/docker) y docker-compose (/), con prefijo convencional y etiqueta type:chore', () => {
     const found = ecosystems();
-    assert.deepEqual(found.map((e) => e.ecosystem).sort(), ['docker', 'github-actions', 'npm']);
+    assert.deepEqual(found.map((e) => e.ecosystem).sort(), [
+      'docker',
+      'docker-compose',
+      'github-actions',
+      'npm',
+    ]);
     assert.equal(porNombre('npm').directory, '/');
     assert.equal(porNombre('github-actions').directory, '/');
     assert.equal(porNombre('docker').directory, '/docker');
+    assert.equal(porNombre('docker-compose').directory, '/');
     assert.equal(porNombre('npm').prefix, 'chore(deps)');
     assert.equal(porNombre('github-actions').prefix, 'ci(deps)');
     assert.equal(porNombre('docker').prefix, 'build(deps)');
+    assert.equal(porNombre('docker-compose').prefix, 'build(deps)');
     for (const e of found) {
       assert.equal(e.labels, 'type:chore', `${e.ecosystem}: etiqueta`);
       assert.ok(ETIQUETAS.includes(e.labels));
@@ -1596,16 +1712,22 @@ describe('dependabot.yml', () => {
     }
   });
 
-  test('los grupos tienen nombres cortos (npm, actions, docker y las familias): los largos superaban los 100 caracteres de pr-policy', () => {
+  test('los grupos tienen nombres cortos (npm, actions, docker, compose y las familias): los títulos de Dependabot se leen enteros', () => {
+    // Dependabot está exento del tope de 100 caracteres, pero los títulos largos se cortan en las
+    // listas de PR y de commits: los nombres de grupo siguen siendo cortos.
+    for (const e of ecosystems()) {
+      for (const g of e.groups) assert.ok(g.length <= 12, `${e.ecosystem}: «${g}» es largo`);
+    }
     assert.deepEqual(porNombre('npm').groups, [...Object.keys(FAMILIAS), 'npm']);
     assert.deepEqual(porNombre('github-actions').groups, ['actions']);
     assert.deepEqual(porNombre('docker').groups, ['docker']);
+    assert.deepEqual(porNombre('docker-compose').groups, ['compose']);
   });
 
   test('las majors sueltas no llegan agrupadas: el grupo genérico de cada ecosistema es solo minor y patch', () => {
     for (const e of ecosystems()) {
       const generico = e.grupos.at(-1);
-      assert.equal(generico.nombre, e.ecosystem === 'github-actions' ? 'actions' : e.ecosystem);
+      assert.equal(generico.nombre, NOMBRE_GENERICO[e.ecosystem] ?? e.ecosystem);
       assert.deepEqual(generico.tipos, ['minor', 'patch'], `${e.ecosystem}: grupo genérico`);
     }
   });
@@ -1677,8 +1799,9 @@ describe('dependabot.yml', () => {
     }
   });
 
-  test('las majors que rompen están ignoradas: node (línea 24 LTS), @types/node y typescript', () => {
+  test('las majors que rompen están ignoradas: node (línea 24 LTS), postgres (pg_upgrade), @types/node y typescript', () => {
     assert.deepEqual(porNombre('docker').majorsIgnoradas, ['node']);
+    assert.deepEqual(porNombre('docker-compose').majorsIgnoradas, ['postgres']);
     assert.deepEqual(porNombre('npm').majorsIgnoradas, ['@types/node', 'typescript']);
     assert.deepEqual(porNombre('github-actions').majorsIgnoradas, []);
   });
@@ -1714,7 +1837,159 @@ describe('dependabot.yml', () => {
     assert.ok(dockerfiles.length >= 2, dockerfiles.join(', '));
   });
 
-  test('el título más largo que puede generar Dependabot pasa la política de PR', () => {
+  /**
+   * La imagen (`nombre:etiqueta`) de un servicio de un docker-compose.yml.
+   * @param {string} compose
+   * @param {string} [servicio]
+   * @returns {string | undefined}
+   */
+  const imagenDelCompose = (compose, servicio = 'db') => {
+    const lineas = compose.split('\n');
+    const i = lineas.findIndex((l) => l === `  ${servicio}:`);
+    if (i < 0) return undefined;
+    for (const l of lineas.slice(i + 1)) {
+      if (/^ {0,2}\S/.test(l)) break; // otro servicio, u otra clave de primer nivel
+      const m = new RegExp(`^ {4}image:\\s*${Q}?([^\\s'"#]+)${Q}?\\s*(?:#.*)?$`).exec(l);
+      if (m) return m[1];
+    }
+    return undefined;
+  };
+
+  /** La imagen de `const IMAGEN = '...';` en scripts/con-db-test.mjs. */
+  const imagenDelScript = (script) =>
+    new RegExp(`^const IMAGEN = ${Q}([^'"]+)${Q};$`, 'm').exec(script)?.[1];
+
+  /**
+   * Qué impide que la imagen del compose (la que vigila Dependabot) y la de los tests de
+   * integración sean la misma. Vacío: son idénticas.
+   * @param {string} compose
+   * @param {string} script
+   * @returns {string[]}
+   */
+  const problemasDeImagen = (compose, script) => {
+    const enCompose = imagenDelCompose(compose);
+    const enScript = imagenDelScript(script);
+    if (!enCompose) return ['docker-compose.yml: no se encuentra la imagen del servicio db'];
+    if (!enScript) return ['scripts/con-db-test.mjs: no se encuentra `const IMAGEN = ...`'];
+    return enCompose === enScript
+      ? []
+      : [`docker-compose.yml usa ${enCompose} y scripts/con-db-test.mjs usa ${enScript}`];
+  };
+
+  test('el lector de imágenes elige el servicio db y detecta que el compose y el script difieren (control positivo)', () => {
+    const compose = [
+      'services:',
+      '  api:',
+      '    image: nginx:1',
+      '  db:',
+      '    restart: unless-stopped',
+      "    image: 'postgres:17-alpine' # la del compose",
+      '    ports:',
+      "      - '127.0.0.1:5432:5432'",
+      '  otro:',
+      '    image: redis:7',
+      '',
+    ].join('\n');
+    assert.equal(imagenDelCompose(compose), 'postgres:17-alpine');
+    assert.equal(imagenDelCompose(compose, 'api'), 'nginx:1');
+    assert.equal(imagenDelCompose(compose, 'otro'), 'redis:7');
+    assert.equal(
+      imagenDelCompose('services:\n  db:\n    build: .\n  x:\n    image: a:1\n'),
+      undefined,
+    );
+    assert.equal(imagenDelCompose('services:\n  api:\n    image: a:1\n'), undefined);
+    assert.equal(
+      imagenDelScript("// c\nconst IMAGEN = 'postgres:17-alpine';\n"),
+      'postgres:17-alpine',
+    );
+    assert.equal(imagenDelScript('const OTRA = "a:1";\n'), undefined);
+
+    const script = (imagen) => `import x from 'y';\nconst IMAGEN = '${imagen}';\n`;
+    assert.deepEqual(problemasDeImagen(compose, script('postgres:17-alpine')), []);
+    assert.match(
+      problemasDeImagen(compose, script('postgres:16-alpine'))[0] ?? '',
+      /docker-compose\.yml usa postgres:17-alpine y scripts\/con-db-test\.mjs usa postgres:16-alpine/,
+    );
+    assert.match(
+      problemasDeImagen('services:\n', script('a:1'))[0] ?? '',
+      /imagen del servicio db/,
+    );
+    assert.match(problemasDeImagen(compose, 'nada\n')[0] ?? '', /const IMAGEN/);
+  });
+
+  test('la imagen de Postgres de los tests de integración (con-db-test.mjs) es exactamente la de docker-compose.yml', () => {
+    // Dependabot sube la del compose; la del script no la ve. Sin este test, una subida dejaría
+    // los tests de integración con otra versión de Postgres que la del entorno de desarrollo.
+    assert.deepEqual(
+      problemasDeImagen(read('docker-compose.yml'), read('scripts/con-db-test.mjs')),
+      [],
+    );
+  });
+
+  test('la imagen de gitleaks no está en ningún fichero que Dependabot lea, y el repo lo dice junto a la constante y en la guía', () => {
+    // Dependabot solo lee manifiestos (Dockerfile, docker-compose.yml, workflows...): una
+    // constante de un .mjs no la sigue. Se sube a mano, y esto lo explican el comentario de
+    // `IMAGEN` y la guía de GitHub.
+    const leidos = [
+      'docker-compose.yml',
+      ...readdirSync(join(ROOT, 'docker'))
+        .filter((f) => /dockerfile/i.test(f))
+        .map((f) => `docker/${f}`),
+      ...workflows().map((f) => `.github/workflows/${f}`),
+    ].map((f) => [f, read(f)]);
+    // Control positivo: el detector sí ve una imagen que Dependabot sigue (la de postgres).
+    assert.ok(
+      leidos.some(([, texto]) => /\bpostgres:/.test(texto)),
+      'el detector no ve ni la imagen de postgres',
+    );
+    assert.deepEqual(
+      leidos.filter(([, texto]) => /gitleaks\/gitleaks/.test(texto)).map(([f]) => f),
+      [],
+      'gitleaks ya está en un fichero que Dependabot lee: la nota de que no lo sigue sobra',
+    );
+
+    const script = read('scripts/scan-secrets.mjs');
+    const lineas = script.split('\n');
+    const i = lineas.findIndex((l) => l.startsWith('const IMAGEN ='));
+    assert.ok(i > 0, 'scan-secrets.mjs ya no define IMAGEN');
+    const encima = lineas.slice(Math.max(0, i - 6), i).join('\n');
+    assert.match(encima, /Dependabot/, 'falta el comentario sobre Dependabot junto a IMAGEN');
+    assert.match(
+      read(GUIA),
+      /gitleaks[^\n]*Dependabot|Dependabot[^\n]*gitleaks/,
+      'la guía no dice que Dependabot no sigue la imagen de gitleaks',
+    );
+  });
+
+  test('docker-compose: Dependabot lee docker-compose.yml del directorio de la entrada, donde hay una imagen de postgres con etiqueta', () => {
+    const { directory } = porNombre('docker-compose');
+    const ruta = join(directory.replace(/^\//, ''), 'docker-compose.yml');
+    assert.ok(existsSync(join(ROOT, ruta)), `${ruta} no existe`);
+    assert.match(imagenDelCompose(read(ruta)) ?? '', /^postgres:\S+$/);
+  });
+
+  /**
+   * ¿Fija la imagen la versión menor (`postgres:16.15-alpine`), no solo la mayor
+   * (`postgres:16-alpine`) ni `latest`?
+   * @param {string | undefined} imagen
+   * @returns {boolean}
+   */
+  const fijaLaMenor = (imagen) => /^postgres:\d+\.\d+(?:-[\w.]+)?$/.test(imagen ?? '');
+
+  test('la imagen de Postgres fija la versión menor: con solo la mayor, Dependabot solo vería mayores, que se ignoran', () => {
+    // Dependabot sube un tag dentro de su misma precisión (dependabot-core, `Docker::Tag`):
+    // `16-alpine` solo puede pasar a `17-alpine`, `18-alpine`... y esas están ignoradas, así que
+    // la entrada no abriría nunca un PR. Con `16.15-alpine` propone `16.16-alpine`.
+    assert.equal(fijaLaMenor('postgres:16.15-alpine'), true);
+    assert.equal(fijaLaMenor('postgres:16-alpine'), false);
+    assert.equal(fijaLaMenor('postgres:latest'), false);
+    assert.equal(fijaLaMenor(undefined), false);
+    const imagen = imagenDelCompose(read('docker-compose.yml'));
+    assert.equal(fijaLaMenor(imagen), true, `docker-compose.yml usa ${imagen}`);
+    assert.equal(fijaLaMenor(imagenDelScript(read('scripts/con-db-test.mjs'))), true);
+  });
+
+  test('los títulos más largos que puede generar Dependabot (una o varias actualizaciones) pasan la política de PR como Dependabot', () => {
     const pkgs = [
       'package.json',
       ...JSON.parse(read('package.json')).workspaces.map((w) => `${w}/package.json`),
@@ -1737,48 +2012,64 @@ describe('dependabot.yml', () => {
         ].map((m) => m[1]),
       );
     const longest = (names) => [...names].reduce((a, b) => (b.length > a.length ? b : a), '');
-    const nombres = { npm: npmNames, 'github-actions': actionNames, docker: dockerNames };
-    const versiones = { npm: '10.10.10', 'github-actions': '10.10.10', docker: '10.10.10-alpine' };
+    const composeNames = [
+      ...read('docker-compose.yml').matchAll(/^ +image:\s*(\S+?)(?::\S*)?\s*$/gm),
+    ].map((m) => m[1]);
+    const nombres = {
+      npm: npmNames,
+      'github-actions': actionNames,
+      docker: dockerNames,
+      'docker-compose': composeNames,
+    };
+    const versiones = {
+      npm: '10.10.10',
+      'github-actions': '10.10.10',
+      docker: '10.10.10-alpine',
+      'docker-compose': '10.10.10-alpine',
+    };
 
     for (const { ecosystem, directory, prefix, groups } of ecosystems()) {
       const name = longest(nombres[ecosystem]);
       assert.ok(name, `${ecosystem}: no hay dependencias que actualizar`);
       const v = versiones[ecosystem];
+      const hasta = v.replace('.10-', '.11-').replace(/\.10$/, '.11');
       for (const group of groups) {
-        // Peor caso: el grupo trae una sola actualización (Dependabot titula
-        // "bump X from A to B in the <grupo> group"), las versiones son largas y, fuera de la
-        // raíz, el título añade además el directorio.
-        const directorio = directory === '/' ? '' : ` in ${directory}`;
-        const title = `${prefix}: bump ${name} from ${v} to ${v.replace('.10-', '.11-').replace(/\.10$/, '.11')} in the ${group} group${directorio}`;
-        assert.ok(Array.from(title).length <= 100, `${title.length} caracteres: ${title}`);
-        assert.ok(evaluatePr({ title, body: '' }).ok, `${title.length} caracteres: ${title}`);
+        // Peor caso: una sola actualización en el grupo (el nombre más largo, versiones largas y,
+        // fuera de la raíz, el directorio) o varias (hasta 100). Dependabot no tiene tope de
+        // longitud (ver pr-policy.mjs), pero el formato convencional sí se le exige: aquí falla
+        // si el prefijo de dependabot.yml deja de ser un tipo válido.
+        const una = tituloDeUna({ prefix, nombre: name, desde: v, hasta, grupo: group, directory });
+        const varias = tituloDeGrupo({ prefix, grupo: group, actualizaciones: 100 });
+        for (const title of [una, varias]) {
+          const r = comoDependabot(title);
+          assert.ok(r.ok, `${title.length} caracteres: ${title} (${r.errors})`);
+        }
       }
     }
   });
 
-  test('los títulos de los grupos de familia, en el peor caso, también pasan la política de PR (100 caracteres)', () => {
+  test('los títulos de los grupos de familia, en el peor caso, también pasan la política de PR como Dependabot', () => {
     const npm = porNombre('npm');
     const masLargo = [...directas().keys()].reduce((a, b) => (b.length > a.length ? b : a), '');
     const titulosDe = (grupo) => [
       // Una sola actualización en el grupo, con el nombre más largo de todo el repositorio.
-      `${npm.prefix}: bump ${masLargo} from 10.10.10 to 10.10.11 in the ${grupo} group`,
-      // Varias (más de 99): «bump the <grupo> group with N updates».
-      `${npm.prefix}: bump the ${grupo} group with 100 updates`,
+      tituloDeUna({
+        prefix: npm.prefix,
+        nombre: masLargo,
+        desde: '10.10.10',
+        hasta: '10.10.11',
+        grupo,
+      }),
+      // Varias (más de 99), con el formato real de Dependabot (ver `tituloDeGrupo`).
+      tituloDeGrupo({ prefix: npm.prefix, grupo, actualizaciones: 100 }),
     ];
-    let mayor = 0;
     for (const familia of Object.keys(FAMILIAS)) {
       assert.ok(npm.groups.includes(familia), `npm: falta el grupo «${familia}»`);
       for (const title of titulosDe(familia)) {
-        mayor = Math.max(mayor, Array.from(title).length);
-        assert.ok(Array.from(title).length <= 100, `${title.length} caracteres: ${title}`);
-        assert.ok(evaluatePr({ title, body: '' }).ok, `${title.length} caracteres: ${title}`);
+        const r = comoDependabot(title);
+        assert.ok(r.ok, `${title.length} caracteres: ${title} (${r.errors})`);
       }
     }
-    // Control positivo: el cálculo es exigente (llega cerca del límite) y un nombre de grupo
-    // largo SÍ lo supera, así que el test se pondría rojo.
-    assert.ok(mayor >= 80, `el peor caso solo mide ${mayor} caracteres`);
-    const largo = titulosDe('un-nombre-de-grupo-demasiado-largo-para-el-titulo')[0];
-    assert.equal(evaluatePr({ title: largo, body: '' }).ok, false, largo);
   });
 
   test('el cálculo del peor caso ve los nombres más largos de los cuatro package.json (control positivo)', () => {

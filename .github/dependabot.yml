@@ -1,7 +1,9 @@
 # Actualizaciones de dependencias. Los títulos de los PR (prefijo + "bump ...")
-# tienen que pasar la política de PR (.github/scripts/pr-policy.mjs, máximo 100 caracteres):
-# por eso el prefijo es un commit convencional y los grupos tienen nombres cortos
-# (npm, actions, docker). Las etiquetas deben existir en el repo
+# tienen que pasar la política de PR (.github/scripts/pr-policy.mjs): por eso el prefijo es un
+# commit convencional. Dependabot está exento del límite de 100 caracteres del título (un grupo
+# con un nombre largo lo supera: "bump X from A to B in the G group across 1 directory"), pero no
+# del formato; los grupos tienen nombres cortos (npm, actions, docker, compose) para que el título
+# se lea entero. Las etiquetas deben existir en el repo
 # (se crean en .claude/skills/finapp-github/references/github-setup.md).
 #
 # Las major sueltas no entran en los grupos genéricos: cada una abre su propio PR para
@@ -87,6 +89,33 @@ updates:
       # La imagen `node` se queda en la línea 24 (LTS). Las impares (25, 27...) no son LTS y
       # saltar a otra par es una decisión que afecta a .nvmrc, a `engines` y a @types/node.
       - dependency-name: 'node'
+        update-types: ['version-update:semver-major']
+    commit-message:
+      prefix: 'build(deps)'
+    labels: ['type:chore']
+
+  # La imagen de Postgres de docker-compose.yml. Los tests de integración usan la misma
+  # (IMAGEN en scripts/con-db-test.mjs), que Dependabot no ve: un test de
+  # .github/scripts/repo-config.test.mjs vigila que sean idénticas, así que una subida de aquí
+  # deja en rojo el check `test` hasta que se iguale a mano la del script.
+  # El tag fija la versión menor (`16.15-alpine`, no `16-alpine`) a propósito: Dependabot solo
+  # propone tags de la misma precisión que el actual, y con `16-alpine` solo vería mayores, que
+  # se ignoran: la entrada no abriría nunca un PR. Un test lo exige.
+  - package-ecosystem: 'docker-compose'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      timezone: 'Europe/Madrid'
+    open-pull-requests-limit: 5
+    groups:
+      compose:
+        patterns: ['*']
+        update-types: ['minor', 'patch']
+    ignore:
+      # Una major de Postgres exige `pg_upgrade` sobre los datos (el volumen datos-postgres): se
+      # decide y se hace a mano, junto con la imagen de scripts/con-db-test.mjs.
+      - dependency-name: 'postgres'
         update-types: ['version-update:semver-major']
     commit-message:
       prefix: 'build(deps)'

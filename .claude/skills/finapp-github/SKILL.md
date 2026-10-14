@@ -16,7 +16,7 @@ Carga esta skill antes de crear ramas, commits, PR o issues, o de tocar `.github
 - El agente no hace push ni fusiona: lo hace Fabrizio. Commits solo con permiso explícito, uno por unidad de trabajo, sin atribución de IA ni `Co-Authored-By`.
 - Nunca commit directo a `main`. Ramas `tipo/descripcion`: `^(feat|fix|chore|docs|style|refactor|perf|test|build|ci|revert)/[a-z0-9._-]+$`, desde `main` actualizada.
 - Commits convencionales `tipo(scope)!: descripción`; seguridad como `fix(security)` o `feat(security)`.
-- Fusión por squash. Título del PR = commit final, máximo 100 caracteres. `feat` y `fix` exigen issue y `Closes #N` en el cuerpo.
+- Fusión por squash. Título del PR = commit final, máximo 100 caracteres (salvo los PR de Dependabot). `feat` y `fix` exigen issue y `Closes #N` en el cuerpo.
 - Antes de abrir el PR, `npm run ci` en verde. Nunca `--no-verify`, force push ni saltarse checks.
 - Repo público: nada de datos reales, dumps ni capturas con cifras propias, en código, issues, PR ni logs.
 - Un bug se arregla con su test de regresión primero. Un cambio de BD, con migraciones up/down/up.
