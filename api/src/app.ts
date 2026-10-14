@@ -8,6 +8,7 @@ import type { Env } from './config/env';
 import type { Pool } from './db/cliente';
 import { manejadorErrores, rutaNoEncontrada } from './http/errores';
 import { crearClaveCliente } from './http/ip-cliente';
+import { alExcederElLimite } from './http/limite-excedido';
 import { verificarOrigen } from './http/origen';
 import { crearRutasAuth } from './http/rutas/auth';
 import { crearRutasCategorias } from './http/rutas/categorias';
@@ -56,6 +57,7 @@ export function crearApp(
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: claveCliente,
+    handler: alExcederElLimite,
   });
 
   // Rate limit especifico de login, agresivo por IP. Complementa (no
@@ -67,6 +69,7 @@ export function crearApp(
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: claveCliente,
+    handler: alExcederElLimite,
   });
 
   const app = express();

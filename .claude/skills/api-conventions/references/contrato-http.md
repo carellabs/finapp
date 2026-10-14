@@ -33,8 +33,8 @@ Código por estado (lo fija el manejador central, `api/src/http/errores.ts`; el 
 | 413 | `PAYLOAD_DEMASIADO_GRANDE` | cuerpo por encima del límite |
 | 415 | `TIPO_NO_SOPORTADO` | `Content-Encoding` o `charset` que el lector del cuerpo no soporta |
 | 422 | `VALIDACION_FALLIDA` | Zod, con `detalles` |
+| 429 | `DEMASIADAS_PETICIONES` | un limitador de peticiones (el global o el de login) se ha superado; conserva `Retry-After` y las cabeceras `RateLimit-*` |
 | 500 | `ERROR_INTERNO` | cualquier otro fallo, con `request_id` |
-| 429 | (ninguno) | lo responde `express-rate-limit` con texto plano y `Retry-After`, **sin** este sobre: discrepancia conocida con la regla 4 de `SKILL.md` |
 
 ## Origen de las peticiones que modifican datos (CSRF)
 
