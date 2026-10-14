@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import request from 'supertest';
+import { agenteDesdeElFrontend, desdeElFrontend, ORIGEN_FRONTEND_PRUEBAS } from '../soporte/origen';
 import type { Express } from 'express';
 import { crearApp } from '../../src/app';
 import { cargarEnv } from '../../src/config/env';
@@ -15,12 +15,12 @@ const ENV = cargarEnv({
   NODE_ENV: 'test',
   PORT: '3000',
   DATABASE_URL: urlBd,
-  ORIGEN_FRONTEND: 'http://localhost:5173',
+  ORIGEN_FRONTEND: ORIGEN_FRONTEND_PRUEBAS,
 });
 
 let pool: Pool;
 let app: Express;
-let agente: ReturnType<typeof request.agent>;
+let agente: ReturnType<typeof agenteDesdeElFrontend>;
 let categoriaDeudaId: string;
 
 interface RespuestaDato<T> {
@@ -54,7 +54,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await pool.query('TRUNCATE transacciones, deudas RESTART IDENTITY CASCADE');
-  agente = request.agent(app);
+  agente = agenteDesdeElFrontend(app);
   await agente
     .post('/api/v1/auth/login')
     .send({ nombreUsuario: 'fabrizio', password: 'contrasena-larga-de-verdad' });
@@ -72,7 +72,9 @@ function deudaValida(overrides: Record<string, unknown> = {}): Record<string, un
 
 describe('POST /api/v1/deudas', () => {
   it('sin sesión, 401', async () => {
-    expect((await request(app).post('/api/v1/deudas').send(deudaValida())).status).toBe(401);
+    expect((await desdeElFrontend(app).post('/api/v1/deudas').send(deudaValida())).status).toBe(
+      401,
+    );
   });
 
   it('crea una deuda con pendiente = saldoInicial al no haber pagos', async () => {

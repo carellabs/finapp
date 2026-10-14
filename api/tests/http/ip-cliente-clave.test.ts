@@ -47,7 +47,7 @@ describe('crearClaveCliente: socket IPv4 mapeado a IPv6 (Node con doble pila)', 
     NODE_ENV: 'production',
     PORT: '3000',
     DATABASE_URL: 'postgresql://usuario:clave@db:5432/finapp',
-    ORIGEN_FRONTEND: 'http://localhost:5173',
+    ORIGEN_FRONTEND: 'https://finanzas.example.com',
     TRUST_PROXY: '172.30.0.0/24',
   }).TRUST_PROXY;
   const generarClave = crearClaveCliente({ detrasDeProxy: true, registrar: () => undefined });

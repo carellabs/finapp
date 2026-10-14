@@ -6,9 +6,21 @@ export interface DetalleCampo {
   motivo: string;
 }
 
+/**
+ * Contexto que un error añade a SU línea del log, y solo a ella: nunca sale en
+ * la respuesta. Los campos son nombres de campo y valores simples (método,
+ * ruta, booleanos…), jamás valores de cabeceras ni datos del usuario.
+ */
+export interface RegistroDeError {
+  /** Por defecto `error`. `warn` para un rechazo del cliente que conviene ver. */
+  readonly nivel?: 'warn' | 'error';
+  readonly campos?: Readonly<Record<string, string | number | boolean>>;
+}
+
 export interface ErrorConEstado extends Error {
   status: number;
   detalles?: DetalleCampo[];
+  registro?: RegistroDeError;
 }
 
 function tieneEstadoHttp(error: unknown): error is ErrorConEstado {
@@ -60,9 +72,13 @@ export function traducirErrorPostgres(error: unknown): ErrorConEstado | null {
 const CODIGOS_POR_ESTADO: Readonly<Record<number, string>> = {
   400: 'PETICION_INVALIDA',
   401: 'NO_AUTENTICADO',
+  // Único productor de 403: `verificarOrigen` (la sesión ausente es 401, nunca 403).
+  403: 'ORIGEN_NO_PERMITIDO',
   404: 'NO_ENCONTRADO',
   409: 'CONFLICTO',
   413: 'PAYLOAD_DEMASIADO_GRANDE',
+  // Codificacion (`Content-Encoding`) o juego de caracteres que el lector del cuerpo no soporta.
+  415: 'TIPO_NO_SOPORTADO',
   422: 'VALIDACION_FALLIDA',
   429: 'DEMASIADAS_PETICIONES',
 };
@@ -92,9 +108,12 @@ export const manejadorErrores: ErrorRequestHandler = (errorSinTipar: unknown, _r
   const codigo = CODIGOS_POR_ESTADO[estado] ?? 'ERROR_INTERNO';
 
   // El detalle vive en el log; al cliente solo le llega un codigo y el request_id.
+  // Los campos del error van primero para que NO puedan pisar los cuatro de siempre.
+  const registro = tieneEstadoHttp(error) ? error.registro : undefined;
   console.error(
     JSON.stringify({
-      nivel: 'error',
+      ...registro?.campos,
+      nivel: registro?.nivel ?? 'error',
       request_id: requestId,
       estado,
       mensaje: error instanceof Error ? error.message : 'error desconocido',
