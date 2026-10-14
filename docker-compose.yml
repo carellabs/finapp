@@ -37,6 +37,7 @@ services:
       # Sin definir en .env pasan vacias y la API usa sus valores por defecto (ver env.example).
       MAX_SESIONES_POR_USUARIO: ${MAX_SESIONES_POR_USUARIO:-}
       PURGA_SESIONES_INTERVALO_MINUTOS: ${PURGA_SESIONES_INTERVALO_MINUTOS:-}
+      FOTO_MENSUAL_OBJETIVOS_INTERVALO_MINUTOS: ${FOTO_MENSUAL_OBJETIVOS_INTERVALO_MINUTOS:-}
     # Solo loopback: el servidor de desarrollo no se expone a la red local.
     ports:
       - '127.0.0.1:3000:3000'

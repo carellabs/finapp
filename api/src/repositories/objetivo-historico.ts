@@ -28,6 +28,14 @@ export async function obtenerPorMes(
   return rows[0] ?? null;
 }
 
+/** Los meses que ya tienen foto, ascendente. */
+export async function mesesConFoto(pool: Pool): Promise<string[]> {
+  const { rows } = await pool.query<{ mesCobertura: string }>(
+    'SELECT mes_cobertura AS "mesCobertura" FROM objetivo_historico ORDER BY mes_cobertura',
+  );
+  return rows.map((fila) => fila.mesCobertura);
+}
+
 export interface NuevoObjetivoHistorico {
   mesCobertura: string;
   csm: Cents;
@@ -38,24 +46,29 @@ export interface NuevoObjetivoHistorico {
 }
 
 /**
- * Upsert por mes (§3.4: guarda el histórico de objetivos calculados). Se
- * recalcula en cada consulta a `/objetivos/estado`; si el mes ya tenía una
- * fila, se sustituye por la cifra recién calculada (nunca se acumulan
- * varias versiones del mismo mes).
+ * Guarda la foto de un mes SOLO si ese mes no la tiene. Devuelve si la escribió.
+ *
+ * La foto de cierre es histórico inmutable (db-conventions): una vez escrita no se
+ * sustituye, así que el conflicto en `mes_cobertura` (UNIQUE) no actualiza nada. Eso
+ * es también lo que hace seguro que dos instancias de la API ejecuten la tarea a la
+ * vez: la restricción única decide, en la propia base de datos, cuál escribe; la otra
+ * no falla ni pisa nada. No hace falta un bloqueo consultivo: las fotos de meses
+ * distintos son independientes y la de un mismo mes sale de los mismos datos.
  */
-export async function upsert(pool: Pool, entrada: NuevoObjetivoHistorico): Promise<void> {
+export async function insertarSiFalta(
+  pool: Pool,
+  entrada: NuevoObjetivoHistorico,
+): Promise<boolean> {
   // Cada importe se serializa como el mismo texto NUMERIC(12,2) que usa el
   // resto del proyecto (nunca un float), aunque el contenedor sea JSONB.
   const desgloseSerializado: Record<string, string> = Object.fromEntries(
     Object.entries(entrada.desglosePorCategoria).map(([id, valor]) => [id, centsANumeric(valor)]),
   );
 
-  await pool.query(
+  const resultado = await pool.query(
     `INSERT INTO objetivo_historico (mes_cobertura, csm, objetivo, margen_seguridad, meses_objetivo, desglose)
      VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (mes_cobertura) DO UPDATE SET
-       csm = EXCLUDED.csm, objetivo = EXCLUDED.objetivo, margen_seguridad = EXCLUDED.margen_seguridad,
-       meses_objetivo = EXCLUDED.meses_objetivo, desglose = EXCLUDED.desglose`,
+     ON CONFLICT (mes_cobertura) DO NOTHING`,
     [
       entrada.mesCobertura,
       centsANumeric(entrada.csm),
@@ -65,6 +78,7 @@ export async function upsert(pool: Pool, entrada: NuevoObjetivoHistorico): Promi
       JSON.stringify(desgloseSerializado),
     ],
   );
+  return resultado.rowCount === 1;
 }
 
 /** Reconstruye el desglose (en Cents) desde el JSONB guardado. */

@@ -120,3 +120,32 @@ compatible        = mensual_necesario <= capacidad_libre
 ```
 
 Prioridad no negociable: **el fondo de emergencia primero**. Un objetivo secundario incompatible se muestra como tal, con la cifra que le falta.
+
+## 11. La foto mensual (`objetivo_historico`)
+
+La foto del mes **M** es el objetivo que se mostraba DURANTE M: se calcula con los meses con datos **anteriores a M**, con la misma fórmula de §1 y §2. La escribe una vez, al cierre de M, la tarea `foto-mensual-objetivos`; `GET /objetivos/estado` solo la lee.
+
+Con los datos de §1 (`2026-04` = 1.420,00, `2026-05` = 1.385,50, `2026-06` = 1.510,00) y hoy = `2026-07-27`:
+
+```
+foto de 2026-06  (meses < 06: 04 y 05)
+  base     = (142000 + 138550) / 2 = 140275
+  CSM      = 140275 × 1,15 = 161316,25 → HALF_UP → 161316
+  objetivo = 161316 × 6 = 967896                       → 9.678,96 €
+
+cálculo en vivo en julio  (meses 04, 05 y 06)
+  objetivo = 165428 × 6 = 992568                       → 9.925,68 €
+
+delta = 992568 − 967896 = 24672                       → "Tu objetivo ha subido 246,72 € este mes"
+```
+
+Si la foto de junio se calculara con junio dentro, valdría 992568 igual que el cálculo en vivo, el delta sería siempre 0 y la alerta de §7 nunca saltaría.
+
+Casos límite:
+
+- **Primer mes con datos** (sin ningún mes anterior): no tiene foto. Un 0 sería un dato inventado, y el mes siguiente compararía contra él y avisaría de una subida que no existe.
+- **Un mes sin transacciones** entre dos con datos sí tiene foto (el mes siguiente la compara).
+- **La API estuvo parada** uno o varios cierres: la primera pasada tras arrancar crea todas las que falten, cada una con su propia ventana.
+- **Ya tenía foto** (también las que escribió la versión antigua de `GET /objetivos/estado`): se respeta tal cual, no se recalcula. Los parámetros con los que se calculó (`margen_seguridad`, `meses_objetivo`) quedan en la propia fila.
+- **Dos instancias a la vez**: `ON CONFLICT (mes_cobertura) DO NOTHING`; escribe una, la otra no hace nada.
+- **Mes en curso**: nunca se fotografía. "Cerrado" es `mes_cobertura < mes actual` según el `Clock` en `Europe/Madrid`: la foto del mes que acaba sale en la primera pasada tras la medianoche de Madrid, como mucho `FOTO_MENSUAL_OBJETIVOS_INTERVALO_MINUTOS` después.

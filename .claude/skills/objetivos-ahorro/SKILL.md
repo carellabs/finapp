@@ -21,6 +21,8 @@ Leer ANTES de tocar: CSM, fondo de emergencia, progreso, proyección de fecha, o
 6. **Menos de 2 meses cerrados → `suficiencia = 'insuficiente'`.** La cifra se muestra etiquetada como provisional, nunca como meta firme.
 7. **Base del CSM = `(Esencial AND Recurrente) OR categoria = Deuda`**, excluyendo pass-through. `Flexible` y `Prescindible` quedan fuera: en una emergencia se recortan el primer día.
 8. Todo cálculo usa `mes_cobertura` y `Cents`. Ver `../finanzas-domain/SKILL.md`.
+9. **La foto del mes M (`objetivo_historico`) es el objetivo vigente DURANTE M: se calcula con los meses con datos anteriores a M**, los que estaban cerrados entonces, nunca con M. Así la alerta de la regla 2 compara, en M+1, el objetivo de ahora (que ya incluye M) con el de entonces. Con M incluido valdría siempre lo mismo que el cálculo en vivo y la alerta jamás saltaría. Ver `references/formulas-y-casos-limite.md` §11.
+10. **La foto se escribe una sola vez, al cierre del mes, por la tarea programada `foto-mensual-objetivos`; ninguna consulta la escribe** (un `GET` no tiene efectos). Es histórico inmutable: `INSERT … ON CONFLICT DO NOTHING`, nunca se recalcula ni se pisa, tampoco las filas que escribió la versión antigua de `GET /objetivos/estado` (la foto de la última consulta de ese mes). Un mes sin ningún mes anterior con datos no tiene foto: un 0 sería un dato inventado y haría saltar una alerta falsa. Mes sin foto = sin alerta.
 
 ## Decision Gates
 
@@ -37,7 +39,7 @@ Leer ANTES de tocar: CSM, fondo de emergencia, progreso, proyección de fecha, o
 
 1. Test primero. Fórmulas resueltas con cifras en `references/formulas-y-casos-limite.md`.
 2. Implementa en `/shared/src/objetivos` como funciones puras; el reloj entra por parámetro (`Clock`).
-3. Persiste el objetivo calculado de cada mes cerrado en `objetivo_historico`, con desglose por categoría.
+3. Persiste el objetivo de cada mes cerrado en `objetivo_historico`, con desglose por categoría, desde la tarea programada (`api/src/usecases/foto-mensual-*.ts`, intervalo `FOTO_MENSUAL_OBJETIVOS_INTERVALO_MINUTOS`), no desde una consulta. Repone los cierres perdidos si la API estuvo parada, y es idempotente y segura con varias instancias a la vez (la restricción única decide).
 4. Property tests obligatorios: `progreso_pct ∈ [0,1]` y `deficit >= 0` para cualquier entrada.
 
 ## Output Contract

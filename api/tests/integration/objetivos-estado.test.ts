@@ -7,7 +7,7 @@ import { crearApp } from '../../src/app';
 import { cargarEnv } from '../../src/config/env';
 import { crearPool, type Pool } from '../../src/db/cliente';
 import { hashearContrasena } from '../../src/auth/contrasena';
-import { upsert as upsertObjetivoHistorico } from '../../src/repositories/objetivo-historico';
+import { insertarSiFalta } from '../../src/repositories/objetivo-historico';
 
 const urlBd = process.env.DATABASE_URL;
 if (urlBd === undefined || urlBd === '') {
@@ -276,24 +276,12 @@ describe('GET /api/v1/objetivos/estado', () => {
     expect(cuerpo.objetivoMensualAhorroCents).toBe(33000);
   });
 
-  it('no acumula filas en objetivo_historico al repetir la consulta en el mismo mes (§3.4)', async () => {
-    await sembrarMesesCerrados();
-
-    await agente.get('/api/v1/objetivos/estado');
-    await agente.get('/api/v1/objetivos/estado');
-
-    const { rows } = await pool.query<{ total: string }>(
-      "SELECT count(*) AS total FROM objetivo_historico WHERE mes_cobertura = '2026-07'",
-    );
-    expect(rows[0]?.total).toBe('1');
-  });
-
   it('detecta que el objetivo subió y señala la categoría responsable (§3.4, la regla más importante)', async () => {
     await sembrarMesesCerrados();
 
-    // Foto del mes anterior (junio), ya persistida por una consulta pasada:
+    // Foto del mes anterior (junio), ya guardada al cierre por la tarea programada:
     // objetivo más bajo, con Vivienda como la categoría que menos pesaba.
-    await upsertObjetivoHistorico(pool, {
+    await insertarSiFalta(pool, {
       mesCobertura: '2026-06',
       csm: cents(70000),
       objetivo: cents(400000),

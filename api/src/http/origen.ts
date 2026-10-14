@@ -31,8 +31,9 @@ import { crearErrorHttp } from './errores';
  * efecto). Esa RFC da por seguro también a TRACE; aquí queda fuera adrede: la
  * lista es cerrada y todo lo demás se comprueba.
  *
- * Excepción conocida: `GET /api/v1/objetivos/estado` escribe la foto del mes en
- * `objetivo_historico` (ver contrato-http.md). Por ser GET, esta barrera no lo cubre.
+ * Esta barrera no los comprueba, así que ninguno puede escribir: lo vigila
+ * `tests/integration/objetivos-solo-lectura.test.ts` para cada `GET` de la API (ver
+ * contrato-http.md).
  */
 const METODOS_SEGUROS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'OPTIONS']);
 

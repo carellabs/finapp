@@ -6,6 +6,7 @@ import { cargarEnv } from '../../src/config/env';
 import { crearPool, type Pool } from '../../src/db/cliente';
 import { hashearContrasena } from '../../src/auth/contrasena';
 import { agenteDesdeElFrontend, ORIGEN_FRONTEND_PRUEBAS } from '../soporte/origen';
+import { huellaDeLaBd } from '../soporte/huella-bd';
 
 /**
  * Lo que de verdad importa de la comprobación de origen: con una SESIÓN VÁLIDA
@@ -118,23 +119,6 @@ function enviarConSesion(escritura: Escritura, origin: string) {
   return escritura.cuerpo === undefined ? peticion : peticion.send(escritura.cuerpo);
 }
 
-/**
- * Una huella por tabla del esquema `public` (todas, para que una tabla nueva no
- * quede sin vigilar). El SQL es fijo: `query_to_xml` ejecuta en el servidor un
- * `SELECT` cuyo nombre de tabla se cita con `format('%I')`; el orden por el texto
- * de la fila hace la huella independiente del orden físico.
- */
-async function huellaDeLaBd(): Promise<Record<string, string>> {
-  const { rows } = await pool.query<{ tablename: string; huella: string }>(
-    `SELECT tablename,
-            md5(query_to_xml(format('SELECT * FROM %I t ORDER BY t::text', tablename), true, false, '')::text) AS huella
-       FROM pg_tables
-      WHERE schemaname = 'public' AND tablename <> 'pgmigrations'
-      ORDER BY tablename`,
-  );
-  return Object.fromEntries(rows.map((fila) => [fila.tablename, fila.huella]));
-}
-
 beforeAll(async () => {
   pool = crearPool(urlBd);
   app = crearApp(ENV, pool, { limitePorVentanaLogin: 1000, limitePorMinutoGlobal: 10_000 });
@@ -180,14 +164,14 @@ describe('con una sesión válida y un Origin ajeno', () => {
     expect(creada.status).toBe(201);
     const { id } = (creada.body as { data: { id: string } }).data;
     const lista = escrituras(id);
-    const antes = await huellaDeLaBd();
+    const antes = await huellaDeLaBd(pool);
 
     // Con Origin ajeno: todo 403, la base de datos idéntica y la sesión sigue viva.
     for (const escritura of lista) {
       const respuesta = await enviarConSesion(escritura, ORIGEN_AJENO);
       expect(respuesta.status, `${escritura.metodo} ${escritura.ruta}`).toBe(403);
     }
-    expect(await huellaDeLaBd()).toEqual(antes);
+    expect(await huellaDeLaBd(pool)).toEqual(antes);
     const yo = await request(app).get('/api/v1/auth/me').set('Cookie', cookie);
     expect(yo.status).toBe(200);
 
@@ -199,7 +183,7 @@ describe('con una sesión válida y un Origin ajeno', () => {
         escritura.estadoLegitimo,
       );
     }
-    const despues = await huellaDeLaBd();
+    const despues = await huellaDeLaBd(pool);
     for (const tabla of [
       'transacciones',
       'presupuestos',
