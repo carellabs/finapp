@@ -38,11 +38,19 @@ import {
 
 const ETIQUETA = `finapp-web:test-14-${process.pid}-${randomBytes(3).toString('hex')}`;
 
+/** Los atributos de cada etiqueta `<script ...>` de apertura, en orden. */
+function atributosDeScripts(html) {
+  return [...html.matchAll(/<script\b([^>]*)>/gi)].map((m) => m[1]);
+}
+
 /** Lo que una CSP sin 'unsafe-inline' bloquearia de un HTML. Vacio = nada. */
 function contenidoEnLinea(html) {
   const hallazgos = [];
-  for (const [, atributos, cuerpo] of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
-    if (!/\bsrc\s*=/.test(atributos) || cuerpo.trim() !== '') hallazgos.push('script en linea');
+  // El cierre admite espacios y atributos (`</script >`, `</script foo>`): el navegador lo da por valido.
+  for (const [, atributos, cuerpo] of html.matchAll(
+    /<script\b([^>]*)>([\s\S]*?)<\/script[^>]*>/gi,
+  )) {
+    if (!/\bsrc\s*=/i.test(atributos) || cuerpo.trim() !== '') hallazgos.push('script en linea');
   }
   if (/<style\b/i.test(html)) hallazgos.push('<style>');
   if (/\sstyle\s*=/i.test(html)) hallazgos.push('atributo style');
@@ -65,6 +73,34 @@ describe('control positivo: el detector de contenido en linea', () => {
       contenidoEnLinea('<script src="/a.js"></script><script type="module" src="/b.js"></script>'),
       [],
     );
+  });
+
+  it('no se deja engañar por mayusculas ni por una etiqueta de cierre con espacios o atributos', () => {
+    // `</script >`, `</script\n>` y `</script foo>` son cierres validos para el navegador: un
+    // detector que solo reconoce `</script>` dejaria pasar justo lo que la CSP debe vigilar.
+    for (const html of [
+      '<SCRIPT>x()</SCRIPT>',
+      '<script>x()</script >',
+      '<script>x()</script\n>',
+      '<script>x()</script foo="bar">',
+      '<ScRiPt>x()</sCrIpT\t>',
+    ]) {
+      assert.deepEqual(contenidoEnLinea(html), ['script en linea'], html);
+    }
+    // Y con src sigue sin ser contenido en linea, tambien con esas grafias.
+    assert.deepEqual(contenidoEnLinea('<SCRIPT SRC="/a.js"></SCRIPT >'), []);
+  });
+});
+
+describe('control positivo: la lectura de las etiquetas script', () => {
+  it('ve cada etiqueta de apertura, con cualquier grafia', () => {
+    assert.deepEqual(
+      atributosDeScripts(
+        '<script src="/a.js"></script><SCRIPT type="module" src="/b.js"></SCRIPT >',
+      ),
+      [' src="/a.js"', ' type="module" src="/b.js"'],
+    );
+    assert.deepEqual(atributosDeScripts('<p>sin scripts</p><scripts-x>'), []);
   });
 });
 
@@ -211,7 +247,7 @@ describe('imagen web de produccion', () => {
     });
 
     it('aplica el tema con /tema-previo.js, sincrono y ANTES del modulo de React', () => {
-      const scripts = [...html.matchAll(/<script\b([^>]*)>/g)].map((m) => m[1]);
+      const scripts = atributosDeScripts(html);
 
       assert.match(scripts[0], /^\s*src="\/tema-previo\.js"\s*$/);
       assert.match(scripts[1], /type="module"/);
