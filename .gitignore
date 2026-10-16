@@ -33,6 +33,7 @@ npm-debug.log*
 # Backups locales de la BD
 *.dump
 *.sql.gpg
+*.age
 
 # Tooling de IA local (no versionar)
 .atl/

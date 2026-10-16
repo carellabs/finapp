@@ -31,7 +31,7 @@ Modelo de amenazas: la app contiene el detalle completo de las finanzas personal
 | Necesidad | Decisión |
 |---|---|
 | sesión | cookie + tabla en Postgres. **No JWT**: revocar exige una lista en BD, así que acabas con la BD igual y más piezas |
-| rate limit de login | `rate-limiter-flexible` **persistido en Postgres**: reiniciar el contenedor no debe borrar un bloqueo por fuerza bruta |
+| rate limit de login | **dos capas.** El **bloqueo por cuenta** (5 intentos → 15 minutos) va **persistido en Postgres** (`usuarios.intentos_fallidos` / `bloqueado_hasta`): reiniciar el contenedor no lo borra, y es lo que frena la fuerza bruta. El **límite por IP** (`express-rate-limit`) va **en memoria**: con una sola instancia basta, y reiniciar solo reinicia ese contador. Si algún día hay varias instancias, el límite por IP necesitará un almacén compartido |
 | CORS / CSP | origen exacto del frontend, **nunca `*`**; CSP de las páginas sin `unsafe-inline` ni `unsafe-eval` (la fija el Caddy interno, `docker/Caddyfile`; detalle en `references/controles.md`) |
 | render de texto del usuario | escapado por defecto de React. **Prohibido `dangerouslySetInnerHTML`** |
 | nueva dependencia | revisión manual: ¿mantenida? ¿cuántas transitivas arrastra? Se justifica en el commit |
