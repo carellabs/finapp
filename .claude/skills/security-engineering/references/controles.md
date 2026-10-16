@@ -132,7 +132,7 @@ Topología: navegador → Cloudflare (termina TLS) → `cloudflared` → **Caddy
 
 ## Producción — VPS propio
 
-Decisión tomada: **VPS propio con Docker Compose y Caddy** como reverse proxy.
+Decisión tomada: **VPS propio con Docker Compose y sin ningún puerto de entrada**. El tráfico llega por **Cloudflare Tunnel** (`cloudflared` sale a Cloudflare; el acceso lo protege Cloudflare Access) a un **Caddy interno, sin TLS**, que sirve la web y reparte `/api` a la API: un solo origen (ver «Un solo origen»). La administración va por **Tailscale** y los backups son `pg_dump` cifrados con **age** a Backblaze B2. Nada de esto está desplegado todavía: lo cablea `compose.prod.yml`, en la fase 5.
 
 | Control | Implementación |
 |---|---|
