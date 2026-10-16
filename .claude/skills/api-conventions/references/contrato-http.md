@@ -50,7 +50,7 @@ En `/api/v1`, toda petición que no sea `GET`, `HEAD` ni `OPTIONS` (`POST`, `PUT
 
 | Cabeceras de la petición | Resultado |
 |---|---|
-| `Origin` igual, carácter a carácter, a `ORIGEN_FRONTEND` | pasa (aunque `Sec-Fetch-Site` sea `same-site`: así llega el desarrollo, web en `:5173` y API en `:3000`) |
+| `Origin` igual, carácter a carácter, a `ORIGEN_FRONTEND` | pasa (aunque `Sec-Fetch-Site` sea `same-site`: así llega el desarrollo si `VITE_API_URL` es absoluta, web en `:5173` y API en `:3000`; por defecto el proxy de Vite lo hace del mismo origen). En producción es `https://finanzas.carellabs.com`, y Caddy reenvía `Origin` intacto |
 | `Origin` con cualquier otro valor, incluidos `null`, vacío, otro puerto o esquema, una barra final o un prefijo | `403`; `Sec-Fetch-Site` ya no se mira |
 | Sin `Origin` y `Sec-Fetch-Site: same-origin` | pasa |
 | Sin `Origin` y `Sec-Fetch-Site` con otro valor (`same-site`, `cross-site`, `none`, desconocido) | `403` |

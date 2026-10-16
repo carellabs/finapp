@@ -79,7 +79,10 @@ services:
       api:
         condition: service_healthy
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:3000/api/v1}
+      # Un solo origen: el navegador solo habla con :5173 y el servidor de Vite reenvia `/api` a la
+      # API (web/vite.proxy.ts), como en produccion. Una VITE_API_URL absoluta en .env sigue valiendo.
+      VITE_API_URL: ${VITE_API_URL:-/api/v1}
+      API_PROXY_TARGET: http://api:3000
     ports:
       - '127.0.0.1:5173:5173'
     volumes:

@@ -9,9 +9,12 @@ coverage
 .husky
 .claude
 .atl
-.env
-.env.*
-!.env.example
+# Ningun .env en ninguna carpeta (en un .dockerignore, `.env` solo casa en la raiz): un web/.env lo
+# lee Vite al construir y todo VITE_* acaba en el JS publico. La plantilla (env.example, sin punto
+# delante, y .env.example) si entra.
+**/.env
+**/.env.*
+!**/.env.example
 *.log
 playwright-report
 test-results

@@ -3,7 +3,17 @@
   "compilerOptions": {
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
+    // vite.config.ts importa vite.proxy.ts con extension: sin ella, Vite avisa de que el cargador
+    // nativo de configuracion (el futuro por defecto) no la resuelve.
+    "allowImportingTsExtensions": true,
     "types": ["vite/client", "@testing-library/jest-dom"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "vite.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "vite.config.ts",
+    "vite.proxy.ts"
+  ]
 }

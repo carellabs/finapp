@@ -1,4 +1,34 @@
-const URL_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api/v1';
+/**
+ * Base de la API cuando no hay `VITE_API_URL`. RELATIVA a propósito: la app y la API comparten
+ * origen (en producción, docker/Caddyfile manda `/api/*` a la API; en desarrollo, el servidor de
+ * Vite hace de proxy, ver vite.proxy.ts), así que no hay URL absoluta que fijar en el build.
+ */
+const BASE_API_POR_DEFECTO = '/api/v1';
+
+/** La base de la API: `VITE_API_URL` si se definió (y no está vacía), si no la relativa. */
+export function baseApi(configurada: string | undefined): string {
+  return configurada === undefined || configurada.trim() === ''
+    ? BASE_API_POR_DEFECTO
+    : configurada;
+}
+
+/**
+ * URL absoluta de una petición. Una base relativa se resuelve contra `origenActual` (el de la
+ * página): `new URL('/api/v1/x')` a secas lanza `TypeError: Invalid URL`. Una base absoluta
+ * (desarrollo con la API en otro puerto) se respeta tal cual.
+ */
+export function resolverUrl(
+  base: string,
+  ruta: string,
+  query: Record<string, string | undefined>,
+  origenActual: string,
+): URL {
+  const url = new URL(base.replace(/\/$/, '') + ruta, origenActual);
+  for (const [clave, valor] of Object.entries(query)) {
+    if (valor !== undefined) url.searchParams.set(clave, valor);
+  }
+  return url;
+}
 
 export interface DetalleCampoApi {
   campo: string;
@@ -33,10 +63,12 @@ interface OpcionesPeticion {
 }
 
 async function peticion<T>(ruta: string, opciones: OpcionesPeticion = {}): Promise<T> {
-  const url = new URL(URL_BASE.replace(/\/$/, '') + ruta);
-  for (const [clave, valor] of Object.entries(opciones.query ?? {})) {
-    if (valor !== undefined) url.searchParams.set(clave, valor);
-  }
+  const url = resolverUrl(
+    baseApi(import.meta.env.VITE_API_URL),
+    ruta,
+    opciones.query ?? {},
+    window.location.origin,
+  );
 
   let respuesta: Response;
   try {
