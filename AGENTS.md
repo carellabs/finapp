@@ -48,7 +48,9 @@ npm run ci              # cadena completa de gates
 npm test                # tests de los tres workspaces
 npm run typecheck       # tsc --noEmit en los tres
 npm run test:scripts    # tests de los scripts de gates (necesitan Docker o gitleaks)
-npm run build:imagenes  # construye el target production de los dos Dockerfiles
+npm run build:imagenes  # construye el target production de los dos Dockerfiles y el migrate de la API
+npm run test:imagenes   # ejecuta migrate (up/down/up), roles y el alta de usuario (con un pty de verdad); solo necesita Docker
+npm run audit:migrate   # audita lo que lleva la imagen migrate (node-pg-migrate es devDependency); solo lee el lockfile
 docker compose up       # entorno local (requiere .env, ver env.example)
 ```
 

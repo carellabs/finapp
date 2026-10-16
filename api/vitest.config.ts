@@ -21,6 +21,7 @@ export default defineConfig({
         // tiene su propio test unitario; solo no cuenta para el % del archivo.
         'src/auth/sesiones.ts',
         'src/auth/purga-sesiones.ts',
+        'src/auth/usuarios.ts',
         'src/db/transaccion.ts',
         'src/auth/bloqueo.ts',
         'src/auth/middleware.ts',

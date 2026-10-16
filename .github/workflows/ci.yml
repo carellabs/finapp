@@ -102,11 +102,19 @@ jobs:
       # de un PR que no tiene nada que ver.
       - name: Auditoría de dependencias de producción
         run: npm audit --omit=dev --audit-level=high
+      # El cierre de la imagen `migrate` (node-pg-migrate es devDependency, así que la auditoría
+      # de producción no lo mira, y la imagen se despliega con credenciales de DDL). Solo lee el
+      # lockfile: este job sigue sin instalar nada.
+      - name: Auditoría de lo que lleva la imagen migrate
+        run: npm run audit:migrate
       - name: Escaneo de secretos
         run: npm run scan:secrets
 
-  # El target `production` de los dos Dockerfiles: ningún otro gate lo construye y un `COPY` sin
-  # `--chown` o un `npm ci` con scripts rompía el despliegue sin que nadie lo viera.
+  # El target `production` de los dos Dockerfiles y el `migrate` de la API: ningún otro gate los
+  # construye y un `COPY` sin `--chown` o un `npm ci` con scripts rompía el despliegue sin que
+  # nadie lo viera. Además se EJECUTAN (`test:imagenes`): `migrate` sube, baja y vuelve a subir
+  # las migraciones contra un Postgres efímero, y el alta de usuario compilada en `production`
+  # se niega a funcionar sin terminal. Solo usa Node y Docker, por eso este job no instala nada.
   imagenes:
     name: imagenes
     runs-on: ubuntu-latest
@@ -121,3 +129,5 @@ jobs:
           package-manager-cache: false
       - name: Construir las imágenes de producción
         run: npm run build:imagenes
+      - name: Verificar las imágenes (migrate up/down/up y alta de usuario sin terminal)
+        run: npm run test:imagenes

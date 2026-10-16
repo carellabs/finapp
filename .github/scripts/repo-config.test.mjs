@@ -461,8 +461,12 @@ describe('ci.yml', () => {
         'npm run build',
       ],
       integracion: ['npm ci', 'npm run test:integration'],
-      seguridad: ['npm audit --omit=dev --audit-level=high', 'npm run scan:secrets'],
-      imagenes: ['npm run build:imagenes'],
+      seguridad: [
+        'npm audit --omit=dev --audit-level=high',
+        'npm run audit:migrate',
+        'npm run scan:secrets',
+      ],
+      imagenes: ['npm run build:imagenes', 'npm run test:imagenes'],
     };
     const jobs = jobsOf(ci());
     for (const [id, comandos] of Object.entries(esperado)) {
@@ -549,10 +553,12 @@ describe('paridad entre `npm run ci` (scripts/ci.mjs) y ci.yml', () => {
         'coverage',
         'test:integration',
         'audit:deps',
+        'audit:migrate',
         'scan:secrets',
         'test:scripts',
         'build',
         'build:imagenes',
+        'test:imagenes',
       ],
     );
   });
@@ -614,6 +620,424 @@ describe('paridad entre `npm run ci` (scripts/ci.mjs) y ci.yml', () => {
       assert.ok(tests.length >= 1, `${dir} sin tests`);
     }
     assert.ok(pasosLocales().some((p) => p.script === 'test:scripts'));
+  });
+});
+
+// ─────────────────────── docker/api.Dockerfile: la imagen `migrate` ───────────────────────
+
+/**
+ * Las etapas de un Dockerfile: `{ nombre, desde, instrucciones }`, con las líneas continuadas
+ * (`\`) unidas y sin comentarios.
+ * @param {string} texto
+ * @returns {{ nombre: string | undefined, desde: string, instrucciones: string[] }[]}
+ */
+function etapasDe(texto) {
+  const lineas = texto
+    .replace(/\\\n\s*/g, ' ')
+    .split('\n')
+    .map((l) => l.trim().replace(/\s+/g, ' '))
+    .filter((l) => l !== '' && !l.startsWith('#'));
+  const etapas = [];
+  for (const linea of lineas) {
+    const from = /^FROM\s+(\S+)(?:\s+AS\s+(\S+))?$/i.exec(linea);
+    if (from) etapas.push({ desde: from[1], nombre: from[2], instrucciones: [] });
+    else etapas.at(-1)?.instrucciones.push(linea);
+  }
+  return etapas;
+}
+
+describe('docker/api.Dockerfile: target migrate (contenedor de un solo uso con node-pg-migrate)', () => {
+  const etapas = () => etapasDe(read('docker/api.Dockerfile'));
+  const etapa = (nombre) => {
+    const encontrada = etapas().find((e) => e.nombre === nombre);
+    assert.ok(encontrada, `docker/api.Dockerfile no tiene la etapa «${nombre}»`);
+    return encontrada;
+  };
+  const instruccionesDe = (e, nombre) =>
+    e.instrucciones.filter((i) => new RegExp(`^${nombre}\\s`, 'i').test(i));
+
+  test('el lector de etapas une las líneas continuadas, ignora comentarios y distingue etapas (control positivo)', () => {
+    const lector = etapasDe(
+      [
+        '# syntax=docker/dockerfile:1',
+        'FROM node:24-alpine@sha256:abc AS base',
+        '# un comentario',
+        'RUN apk add \\',
+        '  --no-cache tini',
+        'FROM base AS otra',
+        'USER node',
+        'FROM node:24',
+        'COPY a b',
+      ].join('\n'),
+    );
+    assert.deepEqual(
+      lector.map((e) => [e.nombre, e.desde, e.instrucciones]),
+      [
+        ['base', 'node:24-alpine@sha256:abc', ['RUN apk add --no-cache tini']],
+        ['otra', 'base', ['USER node']],
+        [undefined, 'node:24', ['COPY a b']],
+      ],
+    );
+  });
+
+  test('existen las etapas `migrate-deps` y `migrate`, y `build:imagenes` construye el target migrate', () => {
+    etapa('migrate-deps');
+    etapa('migrate');
+    assert.match(JSON.parse(read('package.json')).scripts['build:imagenes'], /--target migrate\b/);
+  });
+
+  test('parte de la MISMA imagen node fijada por digest que production', () => {
+    const desde = etapa('migrate').desde;
+    assert.match(desde, /^node:\S+@sha256:[0-9a-f]{64}$/, 'la imagen no está fijada por digest');
+    assert.equal(desde, etapa('production').desde);
+  });
+
+  test('corre como `node`, nunca como root', () => {
+    for (const nombre of ['migrate-deps', 'migrate']) {
+      const usuarios = instruccionesDe(etapa(nombre), 'USER');
+      assert.ok(usuarios.length >= 1, `${nombre}: sin USER`);
+      assert.equal(usuarios.at(-1), 'USER node', `${nombre}: el usuario final no es node`);
+      assert.ok(
+        usuarios.every((u) => u === 'USER node'),
+        `${nombre}: ${usuarios.join(', ')}`,
+      );
+    }
+  });
+
+  test('todo COPY lleva --chown=node:node (tras USER node, sin él los ficheros quedan de root)', () => {
+    let copias = 0;
+    for (const nombre of ['migrate-deps', 'migrate']) {
+      for (const copia of instruccionesDe(etapa(nombre), 'COPY')) {
+        copias += 1;
+        assert.match(copia, /--chown=node:node\b/, `${nombre}: ${copia}`);
+      }
+    }
+    assert.ok(copias >= 5, `solo ${copias} COPY comprobados`);
+  });
+
+  test('todo `npm ci` lleva --ignore-scripts: ningún script de instalación de terceros se ejecuta', () => {
+    const instalaciones = instruccionesDe(etapa('migrate-deps'), 'RUN').filter((i) =>
+      /\bnpm ci\b/.test(i),
+    );
+    assert.equal(instalaciones.length, 1, instalaciones.join('\n'));
+    assert.match(instalaciones[0], /\bnpm ci\b[^&|;]*--ignore-scripts\b/);
+    // Y ninguna etapa de la cadena instala sin lockfile ni de otra forma.
+    for (const nombre of ['migrate-deps', 'migrate']) {
+      assert.doesNotMatch(
+        instruccionesDe(etapa(nombre), 'RUN').join('\n'),
+        /\bnpm (install|i|add)\b/,
+        `${nombre}: instala sin npm ci`,
+      );
+    }
+  });
+
+  test('la cadena no hereda de las etapas con devDependencies o código (deps, dev, build, prod-deps)', () => {
+    assert.equal(etapa('migrate-deps').desde, 'base');
+    assert.match(etapa('migrate').desde, /^node:/);
+    for (const nombre of ['migrate-deps', 'migrate']) {
+      for (const copia of instruccionesDe(etapa(nombre), 'COPY')) {
+        assert.doesNotMatch(copia, /\bCOPY\s+(--\S+\s+)*\.\s+\./, `${nombre}: copia todo el repo`);
+        assert.doesNotMatch(copia, /--from=(deps|dev|build|prod-deps)\b/, `${nombre}: ${copia}`);
+      }
+    }
+  });
+
+  test('la imagen final lleva solo el cierre de node-pg-migrate y las migraciones, nada más', () => {
+    const copias = instruccionesDe(etapa('migrate'), 'COPY').map((c) =>
+      c.replace(/--chown=\S+\s+/, ''),
+    );
+    assert.deepEqual(copias, [
+      'COPY --from=migrate-deps /app/cierre/node_modules ./node_modules',
+      'COPY api/migraciones ./migraciones',
+    ]);
+  });
+
+  test('las dependencias salen del cierre de node-pg-migrate que npm calcula desde el lockfile', () => {
+    const ejecuciones = instruccionesDe(etapa('migrate-deps'), 'RUN').join('\n');
+    // El selector NO se escribe aquí: lo da scripts/cierre-selector.mjs, que usa también
+    // scripts/auditar-migrate.mjs. Una sola definición: lo que se despliega es lo que se audita.
+    assert.ok(
+      ejecuciones.includes('npm query "$(node scripts/cierre-selector.mjs node-pg-migrate)"'),
+      ejecuciones,
+    );
+    assert.doesNotMatch(ejecuciones, /\[name\^=|#pg-cloudflare|npm query '/);
+    assert.match(
+      ejecuciones,
+      /node scripts\/cierre-dependencias\.mjs \/app\/cierre node-pg-migrate\b/,
+    );
+    for (const script of ['cierre-dependencias', 'cierre-selector']) {
+      assert.ok(
+        etapa('migrate-deps').instrucciones.some((i) =>
+          new RegExp(`^COPY\\s.*scripts/${script}\\.mjs\\b`).test(i),
+        ),
+        `migrate-deps no copia scripts/${script}.mjs`,
+      );
+    }
+  });
+
+  test('arranca con tini y node-pg-migrate sobre las migraciones, y por defecto sube (`up`)', () => {
+    const migrate = etapa('migrate');
+    const entrada = instruccionesDe(migrate, 'ENTRYPOINT');
+    assert.equal(entrada.length, 1);
+    assert.deepEqual(JSON.parse(entrada[0].replace(/^ENTRYPOINT\s+/, '')), [
+      '/sbin/tini',
+      '--',
+      'node',
+      'node_modules/node-pg-migrate/bin/node-pg-migrate.js',
+      '-m',
+      'migraciones',
+    ]);
+    const cmd = instruccionesDe(migrate, 'CMD');
+    assert.equal(cmd.length, 1);
+    assert.deepEqual(JSON.parse(cmd[0].replace(/^CMD\s+/, '')), ['up']);
+    assert.ok(migrate.instrucciones.some((i) => /^RUN\s.*apk add --no-cache tini\b/.test(i)));
+  });
+
+  test('es de producción: NODE_ENV=production, y la etapa production sigue copiando solo dist', () => {
+    assert.ok(etapa('migrate').instrucciones.includes('ENV NODE_ENV=production'));
+    const copiasProduccion = instruccionesDe(etapa('production'), 'COPY').map((c) =>
+      c.replace(/--chown=\S+\s+/, ''),
+    );
+    // El alta de usuario compilada (`dist/crear-usuario.js`) viaja dentro de `dist`: sin tsx.
+    assert.ok(copiasProduccion.includes('COPY --from=build /app/api/dist ./dist'));
+  });
+
+  test('la ÚLTIMA etapa de cada Dockerfile desplegable se llama `production`: es el target por defecto de un `docker build` sin --target', () => {
+    // Un `docker build -f docker/api.Dockerfile .` (o un compose al que se le olvide `target`)
+    // construye la última etapa: si fuera una de pruebas, acabaría en el servidor con python.
+    for (const fichero of ['docker/api.Dockerfile', 'docker/web.Dockerfile']) {
+      const ultima = etapasDe(read(fichero)).at(-1);
+      assert.equal(ultima?.nombre, 'production', `${fichero}: la última etapa no es production`);
+    }
+    // Control positivo: el lector de etapas devuelve de verdad la última, no la primera.
+    assert.equal(etapasDe('FROM a AS uno\nFROM b AS dos').at(-1)?.nombre, 'dos');
+  });
+
+  test('la imagen del pty es un Dockerfile APARTE sobre la imagen de production que le pasa el verificador: api.Dockerfile no sabe nada de ella', () => {
+    // La prueba del alta con un terminal de verdad (scripts/pty/alta.py) necesita python3. Vive en
+    // scripts/pty/Dockerfile: ni python ni el arnés llegan a una etapa de api.Dockerfile, y la
+    // última de este sigue siendo production.
+    const ruta = 'scripts/pty/Dockerfile';
+    assert.ok(existsSync(join(ROOT, ruta)), `${ruta} no existe`);
+    const texto = read(ruta);
+    // Sin valor por defecto: un build sin --build-arg falla ("base name should not be blank")
+    // en vez de construir sobre una imagen cualquiera.
+    assert.match(texto, /^ARG IMAGEN_BASE$/m);
+    const sinComentarios = texto
+      .split('\n')
+      .filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));
+    assert.deepEqual(sinComentarios.slice(0, 2), ['ARG IMAGEN_BASE', 'FROM ${IMAGEN_BASE}']);
+
+    const etapasPty = etapasDe(texto);
+    assert.equal(etapasPty.length, 1);
+    assert.equal(etapasPty[0].desde, '${IMAGEN_BASE}');
+    assert.deepEqual(etapasPty[0].instrucciones, [
+      'USER root',
+      'RUN apk add --no-cache python3',
+      'COPY --chown=node:node scripts/pty/alta.py /pty/alta.py',
+      // Dentro de /app para resolver @node-rs/argon2 de production: comprueba qué contraseña
+      // guarda un hash, con la misma librería que la API.
+      'COPY --chown=node:node scripts/pty/verificar-hash.mjs /app/verificar-hash.mjs',
+      'USER node',
+    ]);
+    assert.ok(existsSync(join(ROOT, 'scripts/pty/alta.py')), 'scripts/pty/alta.py no existe');
+    assert.ok(existsSync(join(ROOT, 'scripts/pty/verificar-hash.mjs')));
+
+    // api.Dockerfile: ni una etapa del pty, ni python, ni el arnés (los comentarios no cuentan).
+    assert.equal(
+      etapas().some((e) => e.nombre === 'pty-test'),
+      false,
+    );
+    const instrucciones = etapas()
+      .flatMap((e) => [e.desde, ...e.instrucciones])
+      .join('\n');
+    assert.doesNotMatch(instrucciones, /python|pty/i);
+  });
+});
+
+describe('imágenes: construcción y verificación (build:imagenes, test:imagenes)', () => {
+  const scriptsNpm = () => JSON.parse(read('package.json')).scripts;
+  const VERIFICADOR = 'scripts/verificar-imagenes.mjs';
+
+  /** Especificadores de `import` de un módulo (estáticos), para saber de dónde importa. */
+  const importsDe = (texto) =>
+    [...texto.matchAll(/^\s*import\s+(?:[^'"]*?\sfrom\s+)?['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+
+  test('`build:imagenes` construye los tres targets: production de la API y de la web, y migrate', () => {
+    const construcciones = scriptsNpm()['build:imagenes'].split(' && ');
+    assert.deepEqual(construcciones, [
+      'docker build -f docker/api.Dockerfile --target production -t finapp-api:ci .',
+      'docker build -f docker/web.Dockerfile --target production -t finapp-web:ci .',
+      'docker build -f docker/api.Dockerfile --target migrate -t finapp-api-migrate:ci .',
+    ]);
+  });
+
+  test('`test:imagenes` ejecuta scripts/verificar-imagenes.mjs, y ese fichero existe', () => {
+    assert.equal(scriptsNpm()['test:imagenes'], `node ${VERIFICADOR}`);
+    assert.ok(existsSync(join(ROOT, VERIFICADOR)), `${VERIFICADOR} no existe`);
+  });
+
+  test('el detector de imports ve los estáticos y distingue paquetes de npm de módulos de Node y relativos (control positivo)', () => {
+    const muestra = [
+      "import pg from 'pg';",
+      "import { a, b } from './esquema-sql.mjs';",
+      "import { randomBytes } from 'node:crypto';",
+      "import 'node:fs';",
+      'import {',
+      '  uno,',
+      "} from '@scope/paquete';",
+      'const texto = "import x from \'no-es-un-import\'";',
+    ].join('\n');
+    assert.deepEqual(importsDe(muestra), [
+      'pg',
+      './esquema-sql.mjs',
+      'node:crypto',
+      'node:fs',
+      '@scope/paquete',
+    ]);
+  });
+
+  /**
+   * Los módulos locales que alcanza un script, él incluido, comprobando que NINGUNO importa un
+   * paquete de npm ni usa un import dinámico.
+   * @param {string} entrada
+   * @returns {string[]} ordenados
+   */
+  const modulosSoloNode = (entrada) => {
+    const pendientes = [entrada];
+    const vistos = new Set();
+    while (pendientes.length > 0) {
+      const fichero = pendientes.pop();
+      if (vistos.has(fichero)) continue;
+      vistos.add(fichero);
+      const texto = read(fichero);
+      const sinComentariosJs = texto.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      assert.doesNotMatch(
+        sinComentariosJs,
+        /\brequire\s*\(|\bimport\s*\(/,
+        `${fichero}: import dinámico`,
+      );
+      for (const especificador of importsDe(texto)) {
+        if (especificador.startsWith('./')) {
+          pendientes.push(join(dirname(fichero), especificador).split(sep).join('/'));
+        } else {
+          assert.match(especificador, /^node:/, `${fichero} importa «${especificador}» de npm`);
+        }
+      }
+    }
+    return [...vistos].sort();
+  };
+
+  test('verificar-imagenes.mjs y lo que importa solo usan Node: el job `imagenes` no instala dependencias', () => {
+    // Un `import pg from 'pg'` aquí rompería el job de GitHub (sin `npm ci`) pero no el local.
+    // Control positivo: se han recorrido los módulos locales de verdad.
+    assert.deepEqual(modulosSoloNode(VERIFICADOR), [
+      'scripts/esquema-sql.mjs',
+      'scripts/imagenes-soporte.mjs',
+      'scripts/procesos.mjs',
+      VERIFICADOR,
+    ]);
+    // Y el job no instala nada (si lo hiciera, este test sobraría).
+    const job = jobsOf(read('.github/workflows/ci.yml')).imagenes;
+    assert.ok(!comandosDe(job).includes('npm ci'));
+  });
+
+  test('auditar-migrate.mjs y lo que importa solo usan Node: el job `seguridad` no instala dependencias, y solo lee el lockfile', () => {
+    assert.deepEqual(modulosSoloNode('scripts/auditar-migrate.mjs'), [
+      'scripts/auditar-migrate.mjs',
+      'scripts/cierre-dependencias.mjs',
+      'scripts/cierre-selector.mjs',
+      'scripts/procesos.mjs',
+    ]);
+    const seguridad = jobsOf(read('.github/workflows/ci.yml')).seguridad;
+    assert.ok(!comandosDe(seguridad).includes('npm ci'));
+    assert.equal(scriptsNpm()['audit:migrate'], 'node scripts/auditar-migrate.mjs');
+    // Lee solo el lockfile: ni `npm query` ni `npm audit` necesitan node_modules.
+    const texto = read('scripts/auditar-migrate.mjs');
+    assert.match(texto, /'query', '--package-lock-only'/);
+    assert.match(texto, /'audit', '--json', '--package-lock-only'/);
+  });
+
+  test('el selector del cierre lo define UN solo fichero: el Dockerfile y la auditoría lo piden a scripts/cierre-selector.mjs', () => {
+    // Sin copias del selector (ni de `@types/` ni de pg-cloudflare) en ningún otro sitio.
+    for (const fichero of [
+      'docker/api.Dockerfile',
+      'scripts/auditar-migrate.mjs',
+      'scripts/cierre-dependencias.mjs',
+      'scripts/verificar-imagenes.mjs',
+    ]) {
+      const texto = read(fichero)
+        .split('\n')
+        .filter((linea) => !/^\s*(#|\/\/|\*|\/\*)/.test(linea))
+        .join('\n');
+      assert.doesNotMatch(
+        texto,
+        /\[name\^=|:not\(#pg-cloudflare\)/,
+        `${fichero} copia el selector`,
+      );
+    }
+    assert.match(read('scripts/auditar-migrate.mjs'), /selectorDelCierre\(RAIZ\)/);
+    assert.match(
+      read('docker/api.Dockerfile'),
+      /\$\(node scripts\/cierre-selector\.mjs node-pg-migrate\)/,
+    );
+  });
+
+  test('construye también la imagen del pty y la prueba con el arnés de scripts/pty/alta.py', () => {
+    const texto = read(VERIFICADOR);
+    // Con su Dockerfile aparte, sobre la etiqueta de production que el mismo script construye.
+    assert.match(texto, /'scripts\/pty\/Dockerfile'/);
+    assert.match(texto, /'--build-arg',\s*`IMAGEN_BASE=\$\{IMAGEN_PRODUCCION\}`/);
+    assert.match(texto, /IMAGEN_PTY,\s*'\.',/);
+    // Si no se puede construir, FALLA ahí (no más tarde, con un `docker run` de una imagen que no
+    // existe), y la imagen se borra al acabar como las otras.
+    assert.match(texto, /exigir\(construccionPty\.status === 0,/);
+    assert.match(texto, /\['rmi', IMAGEN_PTY, IMAGEN_MIGRATE, IMAGEN_PRODUCCION\]/);
+    assert.doesNotMatch(texto, /'pty-test'/);
+    assert.match(texto, /'python3',\s*'\/pty\/alta\.py'/);
+    assert.match(read('scripts/pty/alta.py'), /COMANDO = \["node", "dist\/crear-usuario\.js"\]/);
+    // Las contraseñas llegan al arnés por el entorno, nunca por argumento.
+    assert.doesNotMatch(texto, /--env['"],\s*`?PTY_CLAVE\w*=/);
+    // Y la comprobación de roles y el roles.sql atómico también se verifican.
+    assert.match(texto, /comprobar-roles\.sql/);
+    assert.match(texto, /SELECT 1\/0;/);
+  });
+
+  test('las comprobaciones de psql y de docker pasan por las piezas probadas: nada de `Number(...)` sobre una salida ni de `lanzar` suelto para docker', () => {
+    const texto = read(VERIFICADOR);
+    // Una consulta que falla da '' y Number('') es 0: se leía "no hay usuarios" con psql roto.
+    assert.match(texto, /numeroDeConsulta\(comoAdmin\(consulta\)/);
+    const codigo = texto
+      .split('\n')
+      .filter((linea) => !/^\s*(\/\/|\/\*|\*)/.test(linea))
+      .join('\n');
+    assert.doesNotMatch(codigo, /\bNumber\(/);
+    // Un hijo matado por una señal o con el buffer desbordado limpia y sale (ver imagenes-soporte).
+    assert.match(texto, /^const docker = crearDocker\(lanzar, fallar\);$/m);
+    assert.match(texto, /^const dormir = crearDormir\(lanzar, fallar\);$/m);
+    // El único `lanzar('docker', ...)` sin envoltorio es el de `limpiar` (y el `docker info` inicial).
+    const sueltos = [...texto.matchAll(/lanzar\('docker'/g)].length;
+    assert.equal(sueltos, 4, 'lanzar(docker) sin envoltorio fuera de limpiar() y de `docker info`');
+  });
+
+  test('construye con etiquetas propias (no la `:ci` de build:imagenes): no depende de otro paso ni lo pisa', () => {
+    const texto = read(VERIFICADOR);
+    const etiquetas = [...texto.matchAll(/^const IMAGEN_\w+ = `([^`]+)`;$/gm)].map((m) => m[1]);
+    assert.equal(etiquetas.length, 3, etiquetas.join(' | '));
+    for (const etiqueta of etiquetas) {
+      assert.doesNotMatch(etiqueta, /:ci$/, etiqueta);
+      assert.match(etiqueta, /:verificar-\$\{ID\}$/, etiqueta);
+    }
+  });
+
+  test('los roles que usa son los que crea docker/postgres/roles.sql', () => {
+    const texto = read(VERIFICADOR);
+    const roles = readFileSync(join(ROOT, 'docker/postgres/roles.sql'), 'utf8');
+    for (const constante of ['MIGRADOR', 'APP']) {
+      const nombre = new RegExp(`^const ${constante} = '(\\w+)';$`, 'm').exec(texto)?.[1];
+      assert.ok(nombre, `${VERIFICADOR} no define ${constante}`);
+      assert.match(roles, new RegExp(`CREATE ROLE ${nombre}\\b`), `roles.sql no crea ${nombre}`);
+    }
   });
 });
 
@@ -1837,6 +2261,24 @@ describe('dependabot.yml', () => {
     assert.ok(dockerfiles.length >= 2, dockerfiles.join(', '));
   });
 
+  test('el Dockerfile de la prueba del pty queda fuera de lo que Dependabot lee: solo /docker (sin recursión), con los dos Dockerfiles desplegables', () => {
+    // El ecosistema docker mira UN directorio y no entra en los subdirectorios. El Dockerfile
+    // del pty (scripts/pty/Dockerfile) no se despliega y su base es nuestra propia imagen
+    // (ARG IMAGEN_BASE): no hay nada que subir, y así Dependabot ni lo abre.
+    const docker = porNombre('docker');
+    assert.match(docker.block, new RegExp(`^ {4}directory:\\s*${Q}/docker${Q}\\s*$`, 'm'));
+    assert.ok(
+      !/directories:/.test(docker.block),
+      'el ecosistema docker ya no mira un solo directorio',
+    );
+    const enDocker = readdirSync(join(ROOT, 'docker'))
+      .filter((f) => /dockerfile/i.test(f))
+      .sort();
+    assert.deepEqual(enDocker, ['api.Dockerfile', 'web.Dockerfile']);
+    // Control positivo: el Dockerfile del pty existe, y fuera de ese directorio.
+    assert.ok(existsSync(join(ROOT, 'scripts/pty/Dockerfile')));
+  });
+
   /**
    * La imagen (`nombre:etiqueta`) de un servicio de un docker-compose.yml.
    * @param {string} compose
@@ -1864,16 +2306,17 @@ describe('dependabot.yml', () => {
    * integración sean la misma. Vacío: son idénticas.
    * @param {string} compose
    * @param {string} script
+   * @param {string} [nombre] el fichero del script, para los mensajes
    * @returns {string[]}
    */
-  const problemasDeImagen = (compose, script) => {
+  const problemasDeImagen = (compose, script, nombre = 'scripts/con-db-test.mjs') => {
     const enCompose = imagenDelCompose(compose);
     const enScript = imagenDelScript(script);
     if (!enCompose) return ['docker-compose.yml: no se encuentra la imagen del servicio db'];
-    if (!enScript) return ['scripts/con-db-test.mjs: no se encuentra `const IMAGEN = ...`'];
+    if (!enScript) return [`${nombre}: no se encuentra \`const IMAGEN = ...\``];
     return enCompose === enScript
       ? []
-      : [`docker-compose.yml usa ${enCompose} y scripts/con-db-test.mjs usa ${enScript}`];
+      : [`docker-compose.yml usa ${enCompose} y ${nombre} usa ${enScript}`];
   };
 
   test('el lector de imágenes elige el servicio db y detecta que el compose y el script difieren (control positivo)', () => {
@@ -2063,6 +2506,27 @@ describe('dependabot.yml', () => {
     // Control: el lector ve los tres servicios; si no, el test pasaría vacío.
     assert.deepEqual(Object.keys(serviciosDelCompose(compose)), ['db', 'api', 'web']);
     assert.deepEqual(serviciosSinRotacion(compose), []);
+  });
+
+  test('la imagen de Postgres de la verificación de imágenes (verificar-imagenes.mjs) es exactamente la de docker-compose.yml', () => {
+    // La misma razón que el test anterior: Dependabot solo sube la del compose.
+    assert.deepEqual(
+      problemasDeImagen(
+        read('docker-compose.yml'),
+        read('scripts/verificar-imagenes.mjs'),
+        'scripts/verificar-imagenes.mjs',
+      ),
+      [],
+    );
+    // Control positivo: el nombre del script sale en el mensaje cuando difieren.
+    assert.match(
+      problemasDeImagen(
+        'services:\n  db:\n    image: postgres:17-alpine\n',
+        "const IMAGEN = 'postgres:16-alpine';\n",
+        'scripts/otro.mjs',
+      )[0] ?? '',
+      /scripts\/otro\.mjs usa postgres:16-alpine/,
+    );
   });
 
   test('la imagen de gitleaks no está en ningún fichero que Dependabot lea, y el repo lo dice junto a la constante y en la guía', () => {

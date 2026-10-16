@@ -21,15 +21,22 @@ const PASOS = [
   // Postgres real y efimero: migraciones up/down/up, EXPLAIN y constraints.
   ['integracion', ['run', 'test:integration']],
   ['audit', ['run', 'audit:deps']],
+  // El cierre de la imagen `migrate` (node-pg-migrate, devDependency) que el audit de produccion
+  // de CI no mira: ver scripts/auditar-migrate.mjs.
+  ['audit de la imagen migrate', ['run', 'audit:migrate']],
   ['secretos', ['run', 'scan:secrets']],
   // Los tests del propio gate de secretos (scripts/) y de la configuracion de GitHub, la
   // politica de PR y la paridad con el CI (.github/scripts/): necesitan Docker (o gitleaks) y
   // son lentos, por eso viven aqui y no en el pre-commit.
   ['tests de scripts', ['run', 'test:scripts']],
   ['build', ['run', 'build']],
-  // El target `production` de los Dockerfiles no lo construye ningun otro gate: un `COPY`
-  // sin `--chown` o un `npm ci` con scripts rompia el despliegue y nadie lo veia.
+  // El target `production` de los Dockerfiles (y `migrate`, el de las migraciones) no lo
+  // construye ningun otro gate: un `COPY` sin `--chown` o un `npm ci` con scripts rompia el
+  // despliegue y nadie lo veia.
   ['imagenes docker', ['run', 'build:imagenes']],
+  // Y las ejecuta: `migrate` aplica up/down/up contra un Postgres efimero, y el alta de usuario
+  // compilada en `production` se niega a funcionar sin terminal. Solo necesita Docker.
+  ['imagenes docker: migrate y alta de usuario', ['run', 'test:imagenes']],
 ];
 
 const inicio = Date.now();
