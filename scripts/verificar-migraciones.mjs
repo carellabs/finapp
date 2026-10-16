@@ -8,6 +8,7 @@
  * corregir sin borrar la base de datos.
  */
 import pg from 'pg';
+import { CONSULTA_FUNCIONES, CONSULTA_TABLAS, CONSULTA_TIPOS } from './esquema-sql.mjs';
 import { lanzar } from './procesos.mjs';
 
 const urlBd = process.env.DATABASE_URL;
@@ -29,22 +30,10 @@ await cliente.connect();
 
 const contar = async (consulta) => Number((await cliente.query(consulta)).rows[0].total);
 
-const tablas = `
-  SELECT count(*) AS total FROM information_schema.tables
-  WHERE table_schema = 'public' AND table_name <> 'pgmigrations'`;
-const tipos = `
-  SELECT count(*) AS total FROM pg_type t
-  JOIN pg_namespace n ON n.oid = t.typnamespace
-  WHERE n.nspname = 'public' AND t.typtype = 'e'`;
-const funciones = `
-  SELECT count(*) AS total FROM pg_proc p
-  JOIN pg_namespace n ON n.oid = p.pronamespace
-  WHERE n.nspname = 'public'`;
-
 const trasSubir = {
-  tablas: await contar(tablas),
-  tipos: await contar(tipos),
-  funciones: await contar(funciones),
+  tablas: await contar(CONSULTA_TABLAS),
+  tipos: await contar(CONSULTA_TIPOS),
+  funciones: await contar(CONSULTA_FUNCIONES),
 };
 console.error('[migraciones] tras UP    ->', JSON.stringify(trasSubir));
 
@@ -60,9 +49,9 @@ if (migrar('down', '0').status !== 0) {
 }
 
 const trasBajar = {
-  tablas: await contar(tablas),
-  tipos: await contar(tipos),
-  funciones: await contar(funciones),
+  tablas: await contar(CONSULTA_TABLAS),
+  tipos: await contar(CONSULTA_TIPOS),
+  funciones: await contar(CONSULTA_FUNCIONES),
 };
 console.error('[migraciones] tras DOWN  ->', JSON.stringify(trasBajar));
 
@@ -81,9 +70,9 @@ if (migrar('up').status !== 0) {
 }
 
 const trasResubir = {
-  tablas: await contar(tablas),
-  tipos: await contar(tipos),
-  funciones: await contar(funciones),
+  tablas: await contar(CONSULTA_TABLAS),
+  tipos: await contar(CONSULTA_TIPOS),
+  funciones: await contar(CONSULTA_FUNCIONES),
 };
 console.error('[migraciones] tras RE-UP ->', JSON.stringify(trasResubir));
 
