@@ -1,6 +1,8 @@
 import { isIP } from 'node:net';
 import type { Request } from 'express';
 import { ipKeyGenerator } from 'express-rate-limit';
+import { registrarEnConsola } from '../infra/registro';
+import { leerRequestId } from './request-id';
 
 /**
  * Clave de los limitadores: la IP real del cliente detrás de Cloudflare.
@@ -52,8 +54,11 @@ export interface OpcionesClaveCliente {
    * proxy (desarrollo) es lo normal y registrarlo sería ruido en cada petición.
    */
   readonly detrasDeProxy: boolean;
-  /** Registro del respaldo. Por defecto, una línea JSON en stderr, sin ninguna IP. */
-  readonly registrar?: (motivo: MotivoRespaldo) => void;
+  /**
+   * Registro del respaldo, con el id de la petición si ya lo tiene. Por defecto, una línea
+   * JSON en stderr, sin ninguna IP.
+   */
+  readonly registrar?: (motivo: MotivoRespaldo, requestId?: string) => void;
 }
 
 type ConfiarEnSalto = (direccion: string | undefined, salto: number) => unknown;
@@ -80,15 +85,15 @@ function motivoDelRespaldo(
 }
 
 // Logs sin datos personales (security-engineering, regla 8): ni la IP del
-// socket ni el valor de la cabecera, solo el motivo.
-function registrarEnConsola(motivo: MotivoRespaldo): void {
-  console.error(
-    JSON.stringify({
-      nivel: 'warn',
-      mensaje: 'limitador: clave por req.ip en lugar de CF-Connecting-IP',
-      motivo,
-    }),
-  );
+// socket ni el valor de la cabecera, solo el motivo y el id de la petición, para
+// poder correlar el aviso con su línea de acceso.
+function registrarRespaldo(motivo: MotivoRespaldo, requestId?: string): void {
+  registrarEnConsola({
+    nivel: 'warn',
+    mensaje: 'limitador: clave por req.ip en lugar de CF-Connecting-IP',
+    motivo,
+    ...(requestId === undefined ? {} : { request_id: requestId }),
+  });
 }
 
 /**
@@ -104,7 +109,7 @@ function registrarEnConsola(motivo: MotivoRespaldo): void {
  * inválida…): `TRUST_PROXY` ya no puede ser `true` porque lo rechaza `cargarEnv`.
  */
 export function crearClaveCliente(opciones: OpcionesClaveCliente): (req: Request) => string {
-  const { detrasDeProxy, registrar = registrarEnConsola } = opciones;
+  const { detrasDeProxy, registrar = registrarRespaldo } = opciones;
 
   return (req) => {
     const saltoDeConfianza = saltoInmediatoDeConfianza(req);
@@ -114,7 +119,9 @@ export function crearClaveCliente(opciones: OpcionesClaveCliente): (req: Request
       return ipKeyGenerator(cabecera, PREFIJO_IPV6);
     }
 
-    if (detrasDeProxy) registrar(motivoDelRespaldo(saltoDeConfianza, cabecera));
+    if (detrasDeProxy) {
+      registrar(motivoDelRespaldo(saltoDeConfianza, cabecera), leerRequestId(req.res));
+    }
 
     return req.ip === undefined ? CLAVE_SIN_IP : ipKeyGenerator(req.ip, PREFIJO_IPV6);
   };

@@ -290,8 +290,25 @@ describe('registro cuando la clave cae en req.ip (solo si se espera un proxy)', 
     const avisos = avisosDeClave(espia);
     expect(avisos).toHaveLength(1);
     expect(avisos[0]).toMatchObject({ nivel: 'warn', motivo: 'cabecera_ausente' });
-    expect(Object.keys(avisos[0] ?? {}).sort()).toEqual(['mensaje', 'motivo', 'nivel']);
+    expect(Object.keys(avisos[0] ?? {}).sort()).toEqual([
+      'mensaje',
+      'motivo',
+      'nivel',
+      'request_id',
+    ]);
     expectLogSinIps(espia, '192.0.2.55');
+  });
+
+  it('el aviso lleva el request_id de la petición: el mismo que devuelve la cabecera X-Request-Id', async () => {
+    const espia = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const app = crearAppConProxy(SALTO_DE_CONFIANZA);
+
+    const respuesta = await request(app).get(RUTA_GLOBAL).set('X-Forwarded-For', '192.0.2.55');
+
+    const avisos = avisosDeClave(espia);
+    expect(avisos).toHaveLength(1);
+    expect(respuesta.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
+    expect(avisos[0]).toMatchObject({ request_id: respuesta.headers['x-request-id'] });
   });
 
   it('salto de confianza con cabecera inválida: lo registra sin volcar el valor recibido', async () => {

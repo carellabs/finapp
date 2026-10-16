@@ -16,25 +16,33 @@ Error:
     "codigo": "VALIDACION_FALLIDA",
     "mensaje": "Los datos enviados no son válidos",
     "detalles": [ { "campo": "mes_cobertura", "motivo": "formato_invalido" } ],
-    "request_id": "01J…" } }
+    "request_id": "3f0c6a0e-5b8e-4b53-9d3b-2f6f1d6f8a11" } }
 ```
 
 `request_id` es lo único que correla la respuesta con el log. Ni rutas, ni SQL, ni versiones.
 
-Código por estado (lo fija el manejador central, `api/src/http/errores.ts`; el mensaje es genérico):
+### `X-Request-Id` y `request_id`
+
+- **Toda respuesta que genera la app** lleva la cabecera `X-Request-Id` (éxito, error, `/health`, la petición previa de CORS…): un UUID v4 generado por el servidor para **cada** petición. Lo asigna el primer middleware de la cadena (antes de `helmet`, `cors` y la comprobación de origen), así que también la llevan los 403, 404, 429 y los 400/413/415 del lector del cuerpo.
+- **Lo que rechaza el parser HTTP de Node antes de entregarle la petición a Express no la lleva** ni deja línea de log: el 431 por cabeceras demasiado grandes, el 400 por HTTP mal formado y el 417. Esas respuestas las genera Node, no la app, y no hay `res.locals` donde guardar un id.
+- **Nunca se acepta un id del cliente:** un `X-Request-Id` entrante se ignora (no se copia a la respuesta, al cuerpo ni al log).
+- **Todo** cuerpo de error lleva `error.request_id`, igual al de la cabecera y al de todas las líneas del log de esa petición (la línea de acceso y, si la hay, la del error). Hasta ahora lo llevaban solo los que pasaban por el manejador central; el 404 de una ruta inexistente no.
+- La cabecera no se expone con `Access-Control-Expose-Headers`: en producción la web y la API comparten origen y el cuerpo ya trae el id. En desarrollo (web en `:5173`, API en `:3000`) el id sigue yendo en el cuerpo.
+
+Código por estado (lo fija el manejador central, `api/src/http/errores.ts`; el mensaje es genérico; todos llevan `request_id`):
 
 | Estado | `codigo` | Cuándo |
 |---|---|---|
 | 400 | `PETICION_INVALIDA` | JSON malformado |
 | 401 | `NO_AUTENTICADO` | sin sesión o sesión caducada |
 | 403 | `ORIGEN_NO_PERMITIDO` | escritura que no declara salir del frontend (ver abajo) |
-| 404 | `NO_ENCONTRADO` | recurso o ruta inexistente |
+| 404 | `NO_ENCONTRADO` | recurso o ruta inexistente (con `request_id`, sin eco de la ruta) |
 | 409 | `CONFLICTO` | violación de constraint (FK, unique), o una operación concurrente retuvo un bloqueo más de 5 s (`lock_timeout`): el cliente puede reintentar |
 | 413 | `PAYLOAD_DEMASIADO_GRANDE` | cuerpo por encima del límite |
 | 415 | `TIPO_NO_SOPORTADO` | `Content-Encoding` o `charset` que el lector del cuerpo no soporta |
 | 422 | `VALIDACION_FALLIDA` | Zod, con `detalles` |
 | 429 | `DEMASIADAS_PETICIONES` | un limitador de peticiones (el global o el de login) se ha superado; conserva `Retry-After` y las cabeceras `RateLimit-*` |
-| 500 | `ERROR_INTERNO` | cualquier otro fallo, con `request_id` |
+| 500 | `ERROR_INTERNO` | cualquier otro fallo |
 
 ## Origen de las peticiones que modifican datos (CSRF)
 

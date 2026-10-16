@@ -64,7 +64,11 @@ describe('aplicacion HTTP', () => {
 
     expect(respuesta.status).toBe(404);
     expect(respuesta.body).toEqual({
-      error: { codigo: 'NO_ENCONTRADO', mensaje: 'Recurso no encontrado' },
+      error: {
+        codigo: 'NO_ENCONTRADO',
+        mensaje: 'Recurso no encontrado',
+        request_id: expect.stringMatching(/^[0-9a-f-]{36}$/) as unknown,
+      },
     });
   });
 

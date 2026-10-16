@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import express, { type Request } from 'express';
 import { cargarEnv } from '../../src/config/env';
@@ -76,4 +76,37 @@ describe('crearClaveCliente: socket IPv4 mapeado a IPv6 (Node con doble pila)', 
       expect(generarClave(peticionDesdeSocket(socket))).toBe('198.51.100.9');
     },
   );
+});
+
+describe('crearClaveCliente: el registro del respaldo lleva el id de la petición', () => {
+  function peticion(res: unknown): Request {
+    return {
+      ip: '198.51.100.9',
+      socket: { remoteAddress: '10.0.0.1' },
+      get: () => undefined,
+      app: { get: () => () => false }, // el salto inmediato no es de confianza
+      res,
+    } as unknown as Request;
+  }
+
+  it('pasa al registrador el motivo y el id que la petición ya tiene en su respuesta', () => {
+    const registrar = vi.fn();
+    const generarClave = crearClaveCliente({ detrasDeProxy: true, registrar });
+
+    generarClave(peticion({ locals: { requestId: 'id-de-la-peticion' } }));
+
+    expect(registrar).toHaveBeenCalledTimes(1);
+    expect(registrar).toHaveBeenCalledWith('salto_no_confiable', 'id-de-la-peticion');
+  });
+
+  it('sin respuesta (o sin id) no se inventa ninguno', () => {
+    const registrar = vi.fn();
+    const generarClave = crearClaveCliente({ detrasDeProxy: true, registrar });
+
+    generarClave(peticion(undefined));
+    generarClave(peticion({ locals: {} }));
+
+    expect(registrar).toHaveBeenNthCalledWith(1, 'salto_no_confiable', undefined);
+    expect(registrar).toHaveBeenNthCalledWith(2, 'salto_no_confiable', undefined);
+  });
 });

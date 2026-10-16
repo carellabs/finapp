@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { crearErrorHttp } from './errores';
+import { rutaDePeticion } from './ruta';
 
 /**
  * `handler` de los dos limitadores de `express-rate-limit` (`limiteGlobal` y
@@ -28,12 +29,7 @@ export function alExcederElLimite(req: Request, _res: Response, next: NextFuncti
   const rechazo = crearErrorHttp(429, 'Limite de peticiones superado');
   rechazo.registro = {
     nivel: 'warn',
-    campos: { metodo: req.method, ruta: sinConsulta(req.originalUrl) },
+    campos: { metodo: req.method, ruta: rutaDePeticion(req.originalUrl) },
   };
   next(rechazo);
-}
-
-function sinConsulta(url: string): string {
-  const corte = url.indexOf('?');
-  return corte === -1 ? url : url.slice(0, corte);
 }
