@@ -12,8 +12,8 @@ import { leerRequestId } from './request-id';
  * publicados. Para la API, el salto inmediato es Caddy; `req.ip` sería la IP
  * de `cloudflared` en TODAS las peticiones y los limitadores se comportarían
  * como un único contador global. Cloudflare sí pone la IP del cliente en
- * `CF-Connecting-IP`, y Caddy no la toca (`reverse_proxy` reescribe las
- * `X-Forwarded-*`, no el resto de cabeceras).
+ * `CF-Connecting-IP`, y Caddy la deja pasar si la petición viene de `cloudflared`
+ * (`reverse_proxy` reescribe las `X-Forwarded-*`, no el resto de cabeceras).
  *
  * CONDICIÓN DE SEGURIDAD: `CF-Connecting-IP` solo es fiable si el origen NO es
  * accesible salvo a través del túnel. Cualquiera que llegue al origen por otro
@@ -24,11 +24,12 @@ import { leerRequestId } from './request-id';
  * en la fase 6; este código es la segunda barrera, no la primera).
  *
  * ALCANCE DE ESA SEGUNDA BARRERA: solo protege el acceso DIRECTO a la API. No
- * protege a Caddy. Caddy reenvía `CF-Connecting-IP` sin tocarla; si Caddy fuera
- * alcanzable por otro camino que no sea el túnel (un puerto publicado, otra red
- * Docker), quien llegara por ahí escribiría la cabecera y la API la daría por
- * buena, porque Caddy sí está en `TRUST_PROXY`. Por eso Caddy deberá descartar
- * `CF-Connecting-IP` cuando su `remote_ip` no sea `cloudflared` (lo hará #14).
+ * protege a Caddy. Si Caddy fuera alcanzable por otro camino que no sea el túnel
+ * (un puerto publicado, otra red Docker), quien llegara por ahí escribiría la
+ * cabecera y la API la daría por buena, porque Caddy sí está en `TRUST_PROXY`.
+ * Por eso Caddy descarta `CF-Connecting-IP` cuando su `remote_ip` no es
+ * `cloudflared`: lo hace `docker/Caddyfile` (variable `CLOUDFLARED_IP`) y lo
+ * prueba `scripts/caddy.test.mjs`.
  */
 
 /** Cabecera con la IP del cliente que añade el borde de Cloudflare. */

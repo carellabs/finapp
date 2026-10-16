@@ -22,6 +22,8 @@ Leer ANTES de crear o modificar cualquier componente, vista, formulario, gráfic
 7. **Prohibido `dangerouslySetInnerHTML`.**
 8. **Container / presentational:** los componentes de presentación no llaman a la API ni conocen TanStack Query. Reciben datos por props.
 9. **Los cálculos financieros se importan de `/shared`**, jamás se reimplementan en el componente.
+10. **Nada en línea en el HTML ni en el DOM: la CSP de producción no lleva `'unsafe-inline'`** (la fija Caddy). Prohibidos `<script>` o `<style>` en línea en `index.html` (el script del tema es `public/tema-previo.js`, síncrono en `<head>`), atributos `on*`, `style=""` en el marcado, `setAttribute('style', …)`, `<style>` creados a mano, `eval`/`new Function` y URLs `javascript:`. La prop `style` de React vale (va por CSSOM). Nada inlinado como `data:` (`assetsInlineLimit: 0`): un icono o una fuente va como fichero. En desarrollo no hay CSP: lo que la rompa solo falla en producción, por eso lo vigilan el lint (`eslint.config.js`, sobre `web/src`: `no-eval`, `no-new-func`, `no-script-url`, y `no-restricted-syntax` contra `setAttribute('style'|'on…')`, `createElement('style'|'script')`, `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`document.write`, `dangerouslySetInnerHTML` y `<style>`/`<script>` en JSX) y `web/tests/despliegue/index-html.test.ts` (el HTML).
+11. **La web llama a la API por la ruta relativa `/api/v1`** (`lib/api-cliente.ts`): en producción y en desarrollo comparten origen (en desarrollo, el servidor de Vite hace de proxy de `/api`, `vite.proxy.ts`). Ninguna URL absoluta a la API en el código; `VITE_API_URL` solo la cambia a mano en desarrollo sin proxy.
 
 ## Identidad visual
 

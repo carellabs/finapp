@@ -8,14 +8,8 @@
     <meta name="theme-color" content="#131c16" media="(prefers-color-scheme: dark)" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>FinApp</title>
-    <script>
-      // Pre-paint: fija data-tema antes del primer render para que no haya
-      // parpadeo de tema equivocado mientras carga el modulo de React.
-      (function () {
-        var oscuro = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        document.documentElement.dataset.tema = oscuro ? 'oscuro' : 'claro';
-      })();
-    </script>
+    <!-- Pre-paint del tema: sincrono, antes del modulo (ver public/tema-previo.js). -->
+    <script src="/tema-previo.js"></script>
   </head>
   <body>
     <div id="raiz"></div>

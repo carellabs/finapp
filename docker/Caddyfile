@@ -1,0 +1,151 @@
+# Caddy INTERNO de FinApp: un solo origen (finanzas.carellabs.com).
+#
+#   navegador -> Cloudflare (termina TLS) -> cloudflared -> ESTE Caddy -> API
+#
+#   /api/* y /health -> la API, sin reescribir la ruta (la API ya vive en /api/v1)
+#   todo lo demas    -> los estaticos de /srv; solo las rutas SIN punto caen al index.html del router
+#
+# Sin TLS aqui: lo termina Cloudflare, y este puerto no se publica (solo lo alcanza cloudflared
+# por la red interna de Docker). La imagen esta en docker/web.Dockerfile; el compose de produccion
+# (compose.prod.yml) llega en la fase 5.
+#
+# Variables de entorno (se leen al cargar la configuracion):
+#   CLOUDFLARED_IP  OBLIGATORIA. Una IP o un CIDR: el de cloudflared. Lo mas estricto es su IP fija
+#                   con /32 (o una red dedicada solo para el). Sin ella, o vacia, Caddy NO arranca:
+#                   falla en alto en vez de elegir un valor. Nunca un rango que incluya a otros
+#                   contenedores ni 0.0.0.0/0: ese contenedor podria elegir su propia clave de
+#                   limite de peticiones con CF-Connecting-IP.
+#   API_UPSTREAM    host:puerto de la API. Por defecto api:3000 (el servicio de compose).
+{
+	# Sin API de administracion (por defecto escucha en localhost:2019) y sin HTTPS automatico.
+	admin off
+	auto_https off
+	persist_config off
+
+	# El log de Caddy (sus errores: un 502 con la API caida) no lleva datos del cliente. Detras de
+	# Cloudflare y Access, las cabeceras de una peticion llevan su IP, su correo y su JWT de Access;
+	# Caddy solo redacta Cookie y Authorization. Criterio de LISTA BLANCA: se borran los contenedores
+	# enteros (`request>headers`), no cabeceras con nombre, para que una nueva no se cuele. Quedan el
+	# metodo, la ruta (sin consulta), el estado, la duracion y el mensaje de error.
+	log {
+		format filter {
+			wrap json
+			fields {
+				request>headers delete
+				resp_headers delete
+				request>remote_ip delete
+				request>remote_port delete
+				request>client_ip delete
+				request>uri regexp [?].* ""
+			}
+		}
+	}
+}
+
+:8080 {
+	# Caddy no anuncia que es Caddy ni su version, ni en los estaticos ni en lo que viene de la API.
+	# Excepcion: los errores que genera el propio Caddy (un 405 a un POST, un 502 si la API esta
+	# caida) siguen llevando `Server: Caddy`, sin version. Quitarlo con `handle_errors` haria que
+	# Caddy dejara de registrar los errores del proxy.
+	header -Server
+
+	# CF-Connecting-IP solo es fiable si la peticion llega de cloudflared: Cloudflare la fija en el
+	# borde. La API la usa como clave de sus limitadores de peticiones (api/src/http/ip-cliente.ts)
+	# y confia en este Caddy (TRUST_PROXY). Si alguien alcanzara Caddy por otro camino, la escribiria
+	# el mismo y elegiria su propia clave: aqui se descarta antes de reenviarla. `remote_ip` es el
+	# extremo de la conexion, nunca una cabecera que el cliente pueda escribir.
+	# Entre comillas y con un valor por defecto invalido: sin la variable, o vacia, el matcher recibe
+	# algo que no es una IP y Caddy se niega a cargar la configuracion (sin comillas, un valor vacio
+	# deja `remote_ip` sin argumentos, que es valido y descartaria la cabecera siempre).
+	@no_cloudflared not remote_ip "{$CLOUDFLARED_IP:FALTA_CLOUDFLARED_IP}"
+	request_header @no_cloudflared -CF-Connecting-IP
+	# Las otras dos que Cloudflare fija con la IP del cliente: mismo tratamiento.
+	request_header @no_cloudflared -CF-Connecting-IPv6
+	request_header @no_cloudflared -True-Client-IP
+
+	# Las que nadie legitimo pone delante de la API y la API no lee (Express solo mira
+	# X-Forwarded-For, -Proto y -Host, que `reverse_proxy` reescribe siempre con el extremo real):
+	# se descartan SIEMPRE. Si algun dia se leyera una, esa pasa a ir arriba o a leerse con criterio.
+	request_header -X-Real-IP
+	request_header -Forwarded
+	request_header -X-Forwarded-Port
+
+	# La API: sin reescribir la ruta. Sus cabeceras (las de helmet) pasan tal cual; las de las
+	# paginas de abajo NO se aplican aqui para no duplicarlas ni contradecirlas. /health es de la
+	# API (un monitor externo ve el estado real de la API, no el index.html).
+	# El cuerpo, a 1 MB como mucho: la API limita el JSON a 100 kB, y sin este tope Caddy reenvia
+	# decenas de MB solo para que los rechace.
+	@api path /api /api/* /health
+	handle @api {
+		header -Via
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy {$API_UPSTREAM:api:3000}
+	}
+
+	# Las paginas y los estaticos.
+	handle {
+		root * /srv
+
+		header {
+			# Sin 'unsafe-inline' ni 'unsafe-eval': el script del tema es un fichero (tema-previo.js)
+			# y React aplica `style` por CSSOM, que esta politica no bloquea.
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'"
+			Referrer-Policy "no-referrer"
+			X-Content-Type-Options "nosniff"
+			Permissions-Policy "accelerometer=(), bluetooth=(), browsing-topics=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), hid=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=()"
+			Cross-Origin-Opener-Policy "same-origin"
+			# Igual que la de helmet en la API: nadie de fuera embebe nuestros recursos.
+			Cross-Origin-Resource-Policy "same-origin"
+			# Para los navegadores antiguos que no conocen `frame-ancestors`.
+			X-Frame-Options "DENY"
+			# Igual que la de helmet en la API: dos valores distintos en un mismo origen se pisarian.
+			Strict-Transport-Security "max-age=31536000; includeSubDomains"
+			# Todo se revalida (index.html, sw.js, el manifiesto, tema-previo.js: no llevan hash). Los
+			# assets de abajo lo pisan: sus rutas van despues.
+			Cache-Control "no-cache"
+		}
+
+		# Los assets llevan el hash en el nombre: no cambian nunca, son inmutables. Uno que falta es un
+		# 404, no el index.html (el navegador lo interpretaria como JS), y ese 404 no se cachea.
+		# `route` conserva el orden: si el fichero existe lo sirve file_server (con la primera cabecera)
+		# y acaba ahi; si no, la segunda cabecera pisa a la primera.
+		# `hide .*`: nunca se sirve un fichero oculto (un .env o un .git que se colara en el dist).
+		handle /assets/* {
+			route {
+				header Cache-Control "public, max-age=31536000, immutable"
+				file_server {
+					hide .*
+					pass_thru
+				}
+				header Cache-Control "no-store"
+				respond "" 404
+			}
+		}
+
+		# Cualquier otra ruta con un punto es un fichero (/sw.js, /favicon.ico, /robots.txt...): si
+		# existe se sirve y si no es un 404 de verdad, no el index.html (despista a navegadores,
+		# rastreadores y escaneres). Solo las rutas SIN punto son del router. (Los assets ya los ha
+		# cogido la regla de arriba: Caddy ordena los `handle` por la especificidad de su ruta.)
+		@fichero path_regexp [.]
+		handle @fichero {
+			route {
+				file_server {
+					hide .*
+					pass_thru
+				}
+				header Cache-Control "no-store"
+				respond "" 404
+			}
+		}
+
+		# Cualquier otra ruta es del router de la SPA.
+		handle {
+			try_files {path} /index.html
+			file_server {
+				hide .*
+			}
+		}
+	}
+}
