@@ -16,6 +16,21 @@ const VARIABLES_PROPIAS = [
   'FOTO_MENSUAL_OBJETIVOS_INTERVALO_MINUTOS',
 ];
 
+/** Cuánto espera `spawnSync` al proceso antes de matarlo (estado `null`). */
+export const PLAZO_PROCESO_MS = 60_000;
+
+/**
+ * Timeout de los tests que lanzan un proceso (`ejecutarScript`): lo declara cada fichero, con
+ * `describe(nombre, { timeout: TIMEOUT_TEST_PROCESO_MS }, ...)`. Arrancar `node` + `tsx` tarda
+ * ~1,5 s con la máquina libre, 6-13 s con 12 procesos de CPU a la vez y 25-28 s con 24: el 5 s
+ * por defecto de vitest fallaba a ratos (pre-commit, CI). Es MAYOR que `PLAZO_PROCESO_MS` a
+ * propósito: `spawnSync` bloquea el hilo y vitest solo mide el tiempo al volver, así que un
+ * proceso colgado debe cortarlo `spawnSync` (estado `null`, con su error claro) y no el timeout.
+ * El timeout de TODO lo demás se queda en el de vitest: un test normal que se cuelga falla pronto.
+ * La guarda `tests/config/procesos-con-timeout.test.ts` exige esta constante en cada fichero.
+ */
+export const TIMEOUT_TEST_PROCESO_MS = 90_000;
+
 export interface ResultadoScript {
   readonly estado: number | null;
   readonly salida: string;
@@ -43,7 +58,7 @@ export function ejecutarScript(
     env: { ...base, ...entorno },
     input: entrada,
     encoding: 'utf8',
-    timeout: 60_000,
+    timeout: PLAZO_PROCESO_MS,
   });
   return {
     estado: resultado.status,

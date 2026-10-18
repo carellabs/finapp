@@ -20,6 +20,8 @@ Leer ANTES de escribir cualquier test, tocar la configuración de CI o cerrar un
 5. **Sin tests `skip` en `main`.** Un test desactivado es una mentira verde.
 6. **Property-based obligatorio en el dominio del dinero** (fast-check). Los tests con ejemplos concretos dejan pasar los errores de redondeo.
 7. Ninguna fase se cierra con tests en rojo, lint con warnings o gates por debajo del umbral.
+8. **Los tests que lanzan procesos hijo llevan timeout propio** (`TIMEOUT_TEST_PROCESO_MS` = 90 s, en `api/tests/soporte/ejecutar-script.ts`): con la máquina cargada un `node` tarda decenas de segundos. `api/tests/config/procesos-con-timeout.test.ts` lo exige. El resto de los tests se rige por el timeout global de `web` y `api` (15 s por test; `shared` e integración, los suyos): es un margen frente a la saturación de la máquina, medido, no una licencia para tests lentos; un test normal que se cuelga sigue fallando en segundos. **Un timeout solo se sube con medida**: el tiempo del test en máquina libre y bajo carga (p. ej. 12 y 36 procesos de CPU en bucle, con `PID` guardados y matados por PID), y la medida va en un comentario junto al valor.
+9. **Una espera con sondeo no lleva un tope fijo en segundos**: espera a un hecho (p. ej. que la operación en vuelo termine sin haber llegado al bloqueo) y deja el límite al timeout del test; un tope fijo hace el test dependiente de la velocidad de la máquina.
 
 ## Decision Gates
 
