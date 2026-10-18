@@ -7,7 +7,13 @@ import { cargarEnv } from '../../src/config/env';
 import { crearPool, type Pool } from '../../src/db/cliente';
 import { hashearContrasena } from '../../src/auth/contrasena';
 import { generarToken, hashearToken } from '../../src/auth/token';
-import { crearSesion, purgarSesionesCaducadas, verificarSesion } from '../../src/auth/sesiones';
+import {
+  crearSesion,
+  purgarSesionesCaducadas,
+  verificarSesion,
+  type OpcionesCrearSesion,
+  type SesionCreada,
+} from '../../src/auth/sesiones';
 import { iniciarPurgaSesiones } from '../../src/auth/purga-sesiones';
 import type { EventoRegistro } from '../../src/infra/registro';
 
@@ -43,6 +49,7 @@ beforeAll(async () => {
   // Los límites de peticiones no son lo que se prueba aquí.
   app = crearApp(ENV, pool, { limitePorVentanaLogin: 100_000, limitePorMinutoGlobal: 100_000 });
   hashPassword = await hashearContrasena(PASSWORD);
+  OPCIONES = { maxSesiones: MAX, passwordHashVerificado: hashPassword };
 });
 
 afterAll(async () => {
@@ -103,7 +110,18 @@ async function contarSesiones(usuarioId?: string): Promise<number> {
 const esValida = async (token: string): Promise<boolean> =>
   (await verificarSesion(pool, token)) !== null;
 
-const OPCIONES = { maxSesiones: MAX } as const;
+// Se completa en `beforeAll`: lleva el hash real con el que se crearon los usuarios de estos tests
+// (`crearSesion` lo exige y lo compara con el vigente).
+let OPCIONES: OpcionesCrearSesion;
+
+/** `crearSesion` cuando se espera una sesión (el hash coincide): falla si devuelve `null`. */
+async function crearSesionValida(
+  ...argumentos: Parameters<typeof crearSesion>
+): Promise<SesionCreada> {
+  const sesion = await crearSesion(...argumentos);
+  if (sesion === null) throw new Error('crearSesion devolvió null con el hash vigente');
+  return sesion;
+}
 
 /** Inicia sesión por HTTP y devuelve el estado y el token de la cookie nueva (si la hay). */
 async function login(
@@ -245,7 +263,7 @@ describe('crearSesion: límite de sesiones activas por usuario', () => {
   it('con N+1 inicios de sesión quedan N, y son las más recientes', async () => {
     const tokens: string[] = [];
     for (let i = 0; i <= MAX; i += 1) {
-      tokens.push((await crearSesion(pool, usuarioA, OPCIONES)).token);
+      tokens.push((await crearSesionValida(pool, usuarioA, OPCIONES)).token);
     }
 
     expect(await contarSesiones(usuarioA)).toBe(MAX);
@@ -260,7 +278,7 @@ describe('crearSesion: límite de sesiones activas por usuario', () => {
     const masReciente = await insertarSesion(usuarioA, { creadaEnMs: -1 * DIA_MS });
     const masAntigua = await insertarSesion(usuarioA, { creadaEnMs: -3 * DIA_MS });
 
-    const nueva = await crearSesion(pool, usuarioA, OPCIONES);
+    const nueva = await crearSesionValida(pool, usuarioA, OPCIONES);
 
     expect(await esValida(masAntigua)).toBe(false);
     expect(await esValida(intermedia)).toBe(true);
@@ -272,7 +290,7 @@ describe('crearSesion: límite de sesiones activas por usuario', () => {
   it('con un límite de 1, solo queda la sesión nueva', async () => {
     const previa = await insertarSesion(usuarioA);
 
-    const nueva = await crearSesion(pool, usuarioA, { maxSesiones: 1 });
+    const nueva = await crearSesionValida(pool, usuarioA, { ...OPCIONES, maxSesiones: 1 });
 
     expect(await esValida(previa)).toBe(false);
     expect(await esValida(nueva.token)).toBe(true);
@@ -305,7 +323,7 @@ describe('crearSesion: límite de sesiones activas por usuario', () => {
     const vigente = await insertarSesion(usuarioA, { creadaEnMs: -DIA_MS });
     const otraVigente = await insertarSesion(usuarioA, { creadaEnMs: -2 * DIA_MS });
 
-    const nueva = await crearSesion(pool, usuarioA, OPCIONES);
+    const nueva = await crearSesionValida(pool, usuarioA, OPCIONES);
 
     expect(await esValida(vigente)).toBe(true);
     expect(await esValida(otraVigente)).toBe(true);
@@ -323,7 +341,7 @@ describe('crearSesion: límite de sesiones activas por usuario', () => {
       await insertarSesion(usuarioA, { creadaEnMs: 3 * DIA_MS }),
     ];
 
-    const nueva = await crearSesion(pool, usuarioA, OPCIONES);
+    const nueva = await crearSesionValida(pool, usuarioA, OPCIONES);
 
     // Quien inicia sesión recibe una cookie que funciona, pase lo que pase con las fechas.
     expect(await esValida(nueva.token)).toBe(true);
@@ -381,12 +399,12 @@ describe('crearSesion: atomicidad', () => {
     const otra = await pool.connect();
     const tokenOtra = generarToken();
     let terminada = false;
-    let deA: ReturnType<typeof crearSesion> | undefined;
+    let deA: ReturnType<typeof crearSesionValida> | undefined;
     try {
       await otra.query('BEGIN');
       await otra.query('SELECT 1 FROM usuarios WHERE id = $1 FOR NO KEY UPDATE', [usuarioA]);
 
-      deA = crearSesion(pool, usuarioA, { maxSesiones: 2 }).finally(() => {
+      deA = crearSesionValida(pool, usuarioA, { ...OPCIONES, maxSesiones: 2 }).finally(() => {
         terminada = true;
       });
       await new Promise((resolve) => setTimeout(resolve, 150));
@@ -407,7 +425,7 @@ describe('crearSesion: atomicidad', () => {
     }
     const sesionA = await deA;
 
-    const siguiente = await crearSesion(pool, usuarioA, { maxSesiones: 2 });
+    const siguiente = await crearSesionValida(pool, usuarioA, { ...OPCIONES, maxSesiones: 2 });
 
     expect(await esValida(siguiente.token)).toBe(true);
     expect(await esValida(sesionA.token)).toBe(true);
@@ -422,7 +440,7 @@ describe('crearSesion: atomicidad', () => {
     // la poda: ya con la previa revocada y la nueva insertada. Sin transacción, esos dos
     // pasos habrían quedado confirmados.
     await expect(
-      crearSesion(pool, usuarioA, { maxSesiones: 1.5, tokenPrevio: previa }),
+      crearSesion(pool, usuarioA, { ...OPCIONES, maxSesiones: 1.5, tokenPrevio: previa }),
     ).rejects.toThrow();
 
     expect(await esValida(previa)).toBe(true);
@@ -432,11 +450,13 @@ describe('crearSesion: atomicidad', () => {
 
   it('la conexión vuelve al pool tras un fallo: el pool no se agota', async () => {
     for (let i = 0; i < 15; i += 1) {
-      await expect(crearSesion(pool, usuarioA, { maxSesiones: 1.5 })).rejects.toThrow();
+      await expect(
+        crearSesion(pool, usuarioA, { ...OPCIONES, maxSesiones: 1.5 }),
+      ).rejects.toThrow();
     }
 
     // Con 15 fugas el pool (10 conexiones) estaría agotado y esto no respondería.
-    await expect(crearSesion(pool, usuarioA, OPCIONES)).resolves.toBeDefined();
+    await expect(crearSesion(pool, usuarioA, OPCIONES)).resolves.not.toBeNull();
   });
 });
 
@@ -444,7 +464,7 @@ describe('crearSesion: rotación (sesión previa)', () => {
   it('revoca la sesión previa del mismo usuario y crea la nueva', async () => {
     const previa = await insertarSesion(usuarioA);
 
-    const nueva = await crearSesion(pool, usuarioA, { ...OPCIONES, tokenPrevio: previa });
+    const nueva = await crearSesionValida(pool, usuarioA, { ...OPCIONES, tokenPrevio: previa });
 
     expect(await esValida(previa)).toBe(false);
     expect(await esValida(nueva.token)).toBe(true);
@@ -454,7 +474,7 @@ describe('crearSesion: rotación (sesión previa)', () => {
   it('la sesión previa de OTRO usuario no se revoca', async () => {
     const deB = await insertarSesion(usuarioB);
 
-    const nueva = await crearSesion(pool, usuarioA, { ...OPCIONES, tokenPrevio: deB });
+    const nueva = await crearSesionValida(pool, usuarioA, { ...OPCIONES, tokenPrevio: deB });
 
     expect(await esValida(deB)).toBe(true);
     expect(await esValida(nueva.token)).toBe(true);
@@ -463,7 +483,10 @@ describe('crearSesion: rotación (sesión previa)', () => {
   it('un token previo que no existe no es un error ni borra nada', async () => {
     const otra = await insertarSesion(usuarioA);
 
-    const nueva = await crearSesion(pool, usuarioA, { ...OPCIONES, tokenPrevio: generarToken() });
+    const nueva = await crearSesionValida(pool, usuarioA, {
+      ...OPCIONES,
+      tokenPrevio: generarToken(),
+    });
 
     expect(await esValida(otra)).toBe(true);
     expect(await esValida(nueva.token)).toBe(true);
@@ -485,7 +508,7 @@ describe('crearSesion: rotación (sesión previa)', () => {
     const intermedia = await insertarSesion(usuarioA, { creadaEnMs: -2 * DIA_MS });
     const previa = await insertarSesion(usuarioA, { creadaEnMs: -1 * DIA_MS });
 
-    const nueva = await crearSesion(pool, usuarioA, { ...OPCIONES, tokenPrevio: previa });
+    const nueva = await crearSesionValida(pool, usuarioA, { ...OPCIONES, tokenPrevio: previa });
 
     // Quedan tres: la nueva y las dos que no eran la previa. Si el límite se
     // aplicara antes de rotar, la más antigua caería sin necesidad.
@@ -609,7 +632,7 @@ describe('una transacción ajena retiene la fila del usuario', () => {
     }
     // Control positivo: sin el bloqueo ajeno, la misma llamada funciona.
     expect(await contarSesiones(usuarioA)).toBe(0);
-    await expect(crearSesion(pool, usuarioA, OPCIONES)).resolves.toBeDefined();
+    await expect(crearSesion(pool, usuarioA, OPCIONES)).resolves.not.toBeNull();
   }, 30_000);
 
   it('el login responde 409 controlado en unos 5 s, sin agotar el pool, y funciona al soltarse', async () => {

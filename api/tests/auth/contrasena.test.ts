@@ -23,9 +23,14 @@ describe('hashearContrasena / verificarContrasena', () => {
     expect(hash).toMatch(/^\$argon2id\$/);
   });
 
-  it('la misma contraseña produce hashes distintos cada vez (salt aleatoria)', async () => {
+  it('la misma contraseña produce hashes distintos cada vez (salt aleatoria), y los dos verifican', async () => {
+    // Del invariante de `crearSesion` (issue #34) depende de esto: compara el hash verificado con
+    // el vigente para detectar un cambio de contraseña, y solo detecta uno que repita la
+    // contraseña si cada hash lleva una sal nueva. Si se fijara la sal, este test debe caer.
     const hash1 = await hashearContrasena('repetida');
     const hash2 = await hashearContrasena('repetida');
     expect(hash1).not.toBe(hash2);
+    expect(await verificarContrasena(hash1, 'repetida')).toBe(true);
+    expect(await verificarContrasena(hash2, 'repetida')).toBe(true);
   });
 });

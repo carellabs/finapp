@@ -64,7 +64,7 @@ El `403` no repite lo recibido: ni en el cuerpo ni en el log. El log del rechazo
 
 | Método | Ruta | Notas |
 |---|---|---|
-| `POST` | `/api/v1/auth/login` | rate limit agresivo + bloqueo tras N fallos. Rota: revoca la sesión de la cookie `sid` previa si es del mismo usuario y se autentica bien. Deja como mucho `MAX_SESIONES_POR_USUARIO` sesiones (borra las más antiguas) |
+| `POST` | `/api/v1/auth/login` | rate limit agresivo + bloqueo tras N fallos. Rota: revoca la sesión de la cookie `sid` previa si es del mismo usuario y se autentica bien. Deja como mucho `MAX_SESIONES_POR_USUARIO` sesiones (borra las más antiguas). Si la contraseña se cambia mientras el login se autenticaba con la antigua, responde el mismo `401` que una contraseña errónea, sin crear sesión y sin contar intento fallido |
 | `POST` | `/api/v1/auth/logout` | revoca la sesión en BD |
 | `GET` | `/api/v1/categorias` | lista activa; nunca hardcodeada en el cliente |
 | `GET` | `/api/v1/meses` | meses con datos + flag `cerrado` |
