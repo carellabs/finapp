@@ -6,7 +6,24 @@ import { obtenerConfiguracionObjetivos } from '../repositories/configuracion';
 import { insertarSiFalta, mesesConFoto } from '../repositories/objetivo-historico';
 import { obtenerUltimoSaldo } from '../repositories/saldo-ahorro';
 import { listarTodas, mesesConDatos } from '../repositories/transacciones';
-import { calcularFotoDelMes, mesesPendientesDeFoto } from './foto-mensual-calculo';
+import {
+  ImporteDerivadoFueraDeRango,
+  calcularFotoDelMes,
+  mesesPendientesDeFoto,
+} from './foto-mensual-calculo';
+
+/**
+ * Avisa de una omisión. Un aviso que falla (un registro roto, un stderr cerrado) no puede abortar la
+ * pasada ni dejar sin foto a los meses que sí caben: es solo una notificación, igual que `avisar()`
+ * de `iniciarTareaPeriodica` con `registrar`.
+ */
+function avisarOmision(alOmitir: (mes: MesCobertura) => void, mes: MesCobertura): void {
+  try {
+    alOmitir(mes);
+  } catch {
+    // Nada más que hacer: el aviso se pierde, la tarea sigue.
+  }
+}
 
 /**
  * Guarda en `objetivo_historico` la foto de cada mes CERRADO que aún no la tiene
@@ -22,9 +39,17 @@ import { calcularFotoDelMes, mesesPendientesDeFoto } from './foto-mensual-calcul
  *   que la reconstrucción coincide con la foto que habría salido al cierre. Los
  *   parámetros (margen, meses objetivo) son los de la configuración en el momento de
  *   generarla, y quedan guardados en la propia fila.
+ * - Un mes cuyo CSM u objetivo no cabe en `numeric(12, 2)` (`ImporteDerivadoFueraDeRango`) se OMITE:
+ *   no se escribe, se avisa a `alOmitir` (con el mes, nunca un importe) y se sigue con los demás.
+ *   Es lo mismo que un mes sin datos previos: sin foto no hay alerta de objetivo al alza. Se
+ *   reintenta en cada pasada, porque lo que lo causó puede cambiar (otra ventana de meses).
  * - "Cerrado" lo decide el `Clock` inyectado (Europe/Madrid), nunca `new Date()`.
  */
-export async function generarFotosPendientes(pool: Pool, clock: Clock): Promise<MesCobertura[]> {
+export async function generarFotosPendientes(
+  pool: Pool,
+  clock: Clock,
+  alOmitir: (mes: MesCobertura) => void = () => undefined,
+): Promise<MesCobertura[]> {
   const mesActual = clock.mesActual();
   const [mesesDatos, mesesFoto] = await Promise.all([mesesConDatos(pool), mesesConFoto(pool)]);
 
@@ -43,15 +68,22 @@ export async function generarFotosPendientes(pool: Pool, clock: Clock): Promise<
 
   const creadas: MesCobertura[] = [];
   for (const mes of pendientes) {
-    const foto = calcularFotoDelMes({
-      transacciones,
-      categoriasDeuda,
-      mesesConDatos: mesesConDatosTipados,
-      ahorroDeclarado,
-      mes,
-      config,
-    });
-    if (await insertarSiFalta(pool, foto)) creadas.push(mes);
+    try {
+      const foto = calcularFotoDelMes({
+        transacciones,
+        categoriasDeuda,
+        mesesConDatos: mesesConDatosTipados,
+        ahorroDeclarado,
+        mes,
+        config,
+      });
+      if (await insertarSiFalta(pool, foto)) creadas.push(mes);
+    } catch (error) {
+      // Solo el desbordamiento del valor derivado se omite; cualquier otro fallo (la base de
+      // datos caída...) sigue lanzando y la tarea periódica lo registra.
+      if (!(error instanceof ImporteDerivadoFueraDeRango)) throw error;
+      avisarOmision(alOmitir, mes);
+    }
   }
   return creadas;
 }

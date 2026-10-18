@@ -1,4 +1,5 @@
 import {
+  cabeEnColumnaDeImporte,
   calcularCSM,
   calcularFondoEmergencia,
   compararMeses,
@@ -44,6 +45,20 @@ export function mesesPendientesDeFoto(
   return pendientes;
 }
 
+/**
+ * El CSM o el objetivo de un mes no caben en `numeric(12, 2)` (9.999.999.999,99 €). Los importes de
+ * ENTRADA ya están acotados por `MAX_IMPORTE_CENTS`, pero el objetivo multiplica por ~6,9 una
+ * media de sumas mensuales sin tope de número de transacciones: un valor legal puede no caber.
+ * Sin esta comprobación Postgres respondería `22003` y la tarea fallaría una y otra vez en ese mes,
+ * sin crear tampoco las fotos de los siguientes. El mensaje es fijo: nunca lleva el importe.
+ */
+export class ImporteDerivadoFueraDeRango extends Error {
+  constructor(readonly mes: MesCobertura) {
+    super('El objetivo derivado no cabe en la columna de importes');
+    this.name = 'ImporteDerivadoFueraDeRango';
+  }
+}
+
 export interface EntradaFotoDelMes {
   readonly transacciones: readonly Transaccion[];
   readonly categoriasDeuda: ReadonlySet<string>;
@@ -63,6 +78,8 @@ export interface EntradaFotoDelMes {
  *
  * Con los meses de `mes` en adelante la foto no se calcularía igual: por eso no
  * entran en ningún momento.
+ *
+ * Lanza `ImporteDerivadoFueraDeRango` si el CSM o el objetivo no caben en la columna.
  */
 export function calcularFotoDelMes(entrada: EntradaFotoDelMes): NuevoObjetivoHistorico {
   const { transacciones, categoriasDeuda, ahorroDeclarado, mes, config } = entrada;
@@ -72,6 +89,10 @@ export function calcularFotoDelMes(entrada: EntradaFotoDelMes): NuevoObjetivoHis
 
   const resultadoCSM = calcularCSM(transacciones, categoriasDeuda, mesesPrevios, config);
   const fondo = calcularFondoEmergencia(resultadoCSM.csm, ahorroDeclarado, config);
+
+  if (!cabeEnColumnaDeImporte(resultadoCSM.csm) || !cabeEnColumnaDeImporte(fondo.objetivo)) {
+    throw new ImporteDerivadoFueraDeRango(mes);
+  }
 
   return {
     mesCobertura: mes,

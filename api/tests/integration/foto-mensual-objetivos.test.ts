@@ -500,3 +500,134 @@ describe('iniciarFotoMensualObjetivos', () => {
     });
   });
 });
+
+describe('un mes cuyo objetivo derivado no cabe en numeric(12, 2) se omite (issue #29)', () => {
+  const TOPE = 999_999_999_999;
+
+  /** enero lleva un gasto esencial recurrente igual al tope de entrada (legal); febrero a mayo, un alquiler normal. */
+  async function sembrarEneroGigante(): Promise<void> {
+    await sembrarGasto('2026-01', viviendaId, TOPE);
+    await sembrarAlquileres({
+      '2026-02': 60000,
+      '2026-03': 60000,
+      '2026-04': 60000,
+      '2026-05': 60000,
+    });
+  }
+
+  // La foto de cada mes usa los 3 meses con datos anteriores a él. Con enero dentro de esa
+  // ventana el objetivo desborda (febrero, marzo y abril); la de mayo usa feb-mar-abr y ya no.
+  const OMITIDOS = ['2026-02', '2026-03', '2026-04'];
+  const CREADOS = ['2026-05', '2026-06'];
+
+  it('omite SOLO esos meses, no lanza y sigue con los siguientes', async () => {
+    await sembrarEneroGigante();
+    const omitidos: string[] = [];
+
+    const creadas = await generarFotosPendientes(pool, new FixedClock('2026-07-10'), (m) =>
+      omitidos.push(m),
+    );
+
+    expect(creadas).toEqual(CREADOS);
+    expect(omitidos).toEqual(OMITIDOS);
+    // El mes omitido no deja fila, ni a medias.
+    expect(await mesesConFoto()).toEqual(CREADOS);
+  });
+
+  it('el mes omitido se reintenta en la pasada siguiente (no se da por hecho)', async () => {
+    await sembrarEneroGigante();
+    await generarFotosPendientes(pool, new FixedClock('2026-07-10'));
+    const omitidos: string[] = [];
+
+    const creadas = await generarFotosPendientes(pool, new FixedClock('2026-07-10'), (m) =>
+      omitidos.push(m),
+    );
+
+    expect(creadas).toEqual([]);
+    expect(omitidos).toEqual(OMITIDOS);
+  });
+
+  it('sin quien escuche las omisiones tampoco lanza', async () => {
+    await sembrarEneroGigante();
+
+    await expect(generarFotosPendientes(pool, new FixedClock('2026-07-10'))).resolves.toEqual(
+      CREADOS,
+    );
+  });
+
+  it('si el aviso de la omisión lanza, no aborta la pasada: las fotos de los meses que sí caben se crean', async () => {
+    await sembrarEneroGigante();
+    const avisados: string[] = [];
+
+    const creadas = await generarFotosPendientes(pool, new FixedClock('2026-07-10'), (m) => {
+      avisados.push(m);
+      throw new Error('el registro está roto');
+    });
+
+    expect(creadas).toEqual(CREADOS);
+    // Siguió con los demás meses omitidos: el fallo del aviso de uno no se lleva por delante a los otros.
+    expect(avisados).toEqual(OMITIDOS);
+    expect(await mesesConFoto()).toEqual(CREADOS);
+  });
+
+  it('la tarea avisa con un warn por mes omitido, UNA sola vez por proceso, y sin importes', async () => {
+    await sembrarEneroGigante();
+    const MINUTOS = 2;
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const eventos: EventoRegistro[] = [];
+    const tarea = iniciarFotoMensualObjetivos(pool, new FixedClock('2026-07-10'), MINUTOS, (e) =>
+      eventos.push(e),
+    );
+    const pasadas = () => eventos.filter((e) => e.nivel === 'info').length;
+    const esperar = async (condicion: () => boolean): Promise<void> => {
+      const limite = Date.now() + 5_000;
+      while (!condicion()) {
+        if (Date.now() > limite) throw new Error('la condición no se cumplió a tiempo');
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+
+    await esperar(() => pasadas() === 1);
+    // Segunda pasada: los tres meses siguen pendientes, pero ya se avisó de ellos.
+    await vi.advanceTimersByTimeAsync(MINUTOS * 60_000);
+    await esperar(() => pasadas() === 2);
+    await tarea.detener();
+
+    const avisos = eventos.filter((e) => e.nivel === 'warn');
+    expect(avisos).toHaveLength(3);
+    expect(avisos.map((a) => a.mes)).toEqual(OMITIDOS);
+    for (const aviso of avisos) {
+      expect(aviso).toEqual({
+        nivel: 'warn',
+        mensaje: 'foto mensual de objetivos omitida: el objetivo no cabe en la columna',
+        tarea: 'foto-mensual-objetivos',
+        mes: aviso.mes,
+      });
+    }
+    expect(eventos.filter((e) => e.mensaje === 'tarea periodica fallida')).toEqual([]);
+    expect(eventos.filter((e) => e.nivel === 'info').map((e) => e.creadas)).toEqual([2, 0]);
+    // Ninguna cantidad: ni el tope, ni el objetivo, ni siquiera un número largo.
+    expect(JSON.stringify(eventos)).not.toMatch(/\d{5,}/);
+    expect(await mesesConFoto()).toEqual(CREADOS);
+  });
+
+  it('solo se omite el desbordamiento: cualquier otro fallo al escribir la foto sigue lanzando', async () => {
+    await sembrarAlquileres({ '2026-06': 60000, '2026-07': 60000, '2026-08': 60000 });
+    const omitidos: string[] = [];
+    // El mismo pool, pero la escritura de la foto falla con un error que NO es el del importe.
+    const poolQueFalla = new Proxy(pool, {
+      get(destino, propiedad) {
+        if (propiedad !== 'query') return Reflect.get(destino, propiedad) as unknown;
+        return (sql: unknown, ...resto: unknown[]) =>
+          typeof sql === 'string' && sql.includes('INSERT INTO objetivo_historico')
+            ? Promise.reject(new Error('fallo de la base de datos'))
+            : (destino.query as (...args: unknown[]) => unknown)(sql, ...resto);
+      },
+    });
+
+    await expect(
+      generarFotosPendientes(poolQueFalla, new FixedClock('2026-09-10'), (m) => omitidos.push(m)),
+    ).rejects.toThrow('fallo de la base de datos');
+    expect(omitidos).toEqual([]);
+  });
+});

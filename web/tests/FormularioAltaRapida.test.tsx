@@ -106,4 +106,45 @@ describe('FormularioAltaRapida', () => {
     expect(screen.getByRole('alert')).not.toHaveTextContent(/uuid/i);
     expect(onEnviar).not.toHaveBeenCalled();
   });
+
+  // Issue #29: la API rechaza un importe por encima de numeric(12, 2). La persona lo ve aquí, con su
+  // motivo, y no como un "No hemos podido guardar" genérico tras un 422.
+  describe('importe por encima del tope de la API', () => {
+    function teclear(texto: string): void {
+      fireEvent.click(screen.getByRole('button', { name: /Transferencia/ }));
+      for (const tecla of texto) {
+        fireEvent.click(screen.getByRole('button', { name: tecla }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: 'Continuar' }));
+      fireEvent.click(screen.getByRole('button', { name: /Entra/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Guardar' }));
+    }
+
+    it('10.000.000.000,00 € avisa en el paso del importe, no deja continuar y no se envía', () => {
+      const { onEnviar } = renderizar();
+
+      fireEvent.click(screen.getByRole('button', { name: /Transferencia/ }));
+      for (const tecla of '10000000000') {
+        fireEvent.click(screen.getByRole('button', { name: tecla }));
+      }
+
+      // jest-dom normaliza el espacio duro de es-ES del texto de la página, no el del esperado.
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        /El importe no puede superar 9\.999\.999\.999,99\s€/,
+      );
+      expect(screen.getByRole('button', { name: 'Continuar' })).toBeDisabled();
+      expect(onEnviar).not.toHaveBeenCalled();
+    });
+
+    it('9.999.999.999,99 € (el tope exacto) sí se envía (control positivo)', async () => {
+      const { onEnviar } = renderizar();
+
+      teclear('9999999999,99');
+
+      await waitFor(() => {
+        expect(onEnviar).toHaveBeenCalledTimes(1);
+      });
+      expect(onEnviar.mock.calls[0]?.[0]).toMatchObject({ montoEuros: 9999999999.99 });
+    });
+  });
 });

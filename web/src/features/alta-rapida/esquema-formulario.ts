@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   zDireccionTransferencia,
+  MAX_IMPORTE_CENTS,
+  MOTIVO_IMPORTE_MAXIMO,
   zFechaISO,
   zMesCobertura,
   zMetodoPago,
@@ -10,12 +12,24 @@ import {
   type NuevaTransaccionEntrada,
 } from '@finapp/shared';
 
+/** Euros → céntimos enteros (HALF_UP): la única conversión, la de la validación y la del envío. */
+function eurosACentimos(euros: number): number {
+  return Math.round(euros * 100);
+}
+
 /**
  * Esquema de FORMULARIO, no de API: captura el importe en EUROS (lo que
  * teclea la persona), nunca en céntimos. La conversión a `montoCents` vive
  * en `aEntradaApi`, en el único punto de esta vista que la necesita.
+ *
+ * El importe lleva el mismo tope que la API (`MAX_IMPORTE_CENTS`), para que la persona lo vea aquí, con su motivo,
+ * y no como un 422 genérico al guardar. Se compara en CÉNTIMOS ya redondeados, no en euros con coma
+ * flotante: 9999999999.99 € y 10000000000 € no se distinguen bien como `number` decimales.
  */
-const zImporteEuros = z.number('Indica un importe').positive('El importe debe ser mayor que 0');
+const zImporteEuros = z
+  .number('Indica un importe')
+  .positive('El importe debe ser mayor que 0')
+  .refine((euros) => eurosACentimos(euros) <= MAX_IMPORTE_CENTS, MOTIVO_IMPORTE_MAXIMO);
 
 /**
  * El mensaje de `zUuid` (`/shared`) es técnico a propósito: ese esquema es el
@@ -60,7 +74,7 @@ export type FormularioTransaccion = z.infer<typeof zFormularioTransaccion>;
 
 /** Único lugar de la vista que convierte euros → céntimos y arma el payload de la API. */
 export function aEntradaApi(datos: FormularioTransaccion): NuevaTransaccionEntrada {
-  const montoCents = Math.round(datos.montoEuros * 100);
+  const montoCents = eurosACentimos(datos.montoEuros);
   const base = {
     fecha: datos.fecha,
     mesCobertura: datos.mesCobertura,

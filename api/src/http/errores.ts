@@ -111,6 +111,20 @@ export function traducirErrorPostgres(error: unknown): ErrorConEstado | null {
   if (error.code === '55P03') {
     return crearErrorHttp(409, 'Recurso ocupado por otra operación');
   }
+  // numeric_value_out_of_range: un número que no cabe en su columna (o en un entero: un `LIMIT`
+  // enorme da lo mismo). Se traduce por CÓDIGO, no por importe, así que el mensaje y la causa
+  // hablan de un valor numérico y no de dinero. Es la SEGUNDA barrera: `zMontoCents` ya rechaza un
+  // importe de entrada con 422 y detalle de campo antes de llegar aquí. En una petición el valor
+  // que no cabe viene del cliente (lo derivado, CSM y objetivo, lo escribe la tarea
+  // `foto-mensual-objetivos`; el único derivado que escribe una ruta, el write-off de un préstamo,
+  // está acotado por el tope), así que 422 es la respuesta correcta para él, pero es un fallo
+  // NUESTRO (un validador dejó pasar el valor): por eso se registra como `error`. Sin `detalles`:
+  // solo Zod sabe el campo. Ni el mensaje ni el `detail` de Postgres salen en la respuesta ni en el log.
+  if (error.code === '22003') {
+    const fuera = crearErrorHttp(422, 'Valor numérico fuera de rango');
+    fuera.registro = { nivel: 'error', campos: { causa: 'numero_fuera_de_rango' } };
+    return fuera;
+  }
   return null;
 }
 
