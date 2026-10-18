@@ -21,24 +21,35 @@ interface Montaje {
   readonly preguntar: ReturnType<typeof vi.fn<(pregunta: string) => Promise<string>>>;
   readonly preguntarOculto: ReturnType<typeof vi.fn<(pregunta: string) => Promise<string>>>;
   readonly hashear: ReturnType<typeof vi.fn<(contrasena: string) => Promise<string>>>;
-  readonly guardar: ReturnType<typeof vi.fn<(nombre: string, hash: string) => Promise<void>>>;
+  readonly guardar: ReturnType<
+    typeof vi.fn<(nombre: string, hash: string) => Promise<{ sesionesCerradas: number }>>
+  >;
 }
 
-/** Un alta con `usuario` y las contraseñas que se teclean (la 1.ª y su repetición). */
+/**
+ * Un alta con `usuario` y las contraseñas que se teclean (la 1.ª y su repetición);
+ * `sesionesCerradas` es lo que dice `guardar` que cerró.
+ */
 function montar(
-  opciones: { usuario?: string; contrasenas?: string[]; esInteractivo?: boolean } = {},
+  opciones: {
+    usuario?: string;
+    contrasenas?: string[];
+    esInteractivo?: boolean;
+    sesionesCerradas?: number;
+  } = {},
 ): Montaje {
   const {
     usuario = 'ana',
     contrasenas = [CONTRASENA, CONTRASENA],
     esInteractivo = true,
+    sesionesCerradas = 0,
   } = opciones;
   const salida: string[] = [];
   const pendientes = [...contrasenas];
   const preguntar = vi.fn((_pregunta: string) => Promise.resolve(usuario));
   const preguntarOculto = vi.fn((_pregunta: string) => Promise.resolve(pendientes.shift() ?? ''));
   const hashear = vi.fn((_contrasena: string) => Promise.resolve(HASH));
-  const guardar = vi.fn((_nombre: string, _hash: string) => Promise.resolve());
+  const guardar = vi.fn((_nombre: string, _hash: string) => Promise.resolve({ sesionesCerradas }));
   const deps: DependenciasAlta = {
     esInteractivo,
     preguntar,
@@ -128,6 +139,45 @@ describe('altaUsuario: camino feliz', () => {
     expect(salida).not.toContain(CONTRASENA);
     expect(salida).not.toContain(HASH);
     expect(salida).not.toContain('argon2');
+  });
+});
+
+describe('altaUsuario: avisa de las sesiones que se han cerrado', () => {
+  it('si se cerraron sesiones, lo dice con el número (en plural)', async () => {
+    const montaje = montar({ sesionesCerradas: 3 });
+
+    await altaUsuario(montaje.deps);
+
+    expect(montaje.salida).toContain('Contrasena cambiada. 3 sesiones abiertas cerradas.');
+  });
+
+  it('con una sola sesión lo dice en singular', async () => {
+    const montaje = montar({ sesionesCerradas: 1 });
+
+    await altaUsuario(montaje.deps);
+
+    expect(montaje.salida).toContain('Contrasena cambiada. 1 sesion abierta cerrada.');
+  });
+
+  it('el aviso no lleva la contraseña ni el hash', async () => {
+    const montaje = montar({ sesionesCerradas: 2 });
+
+    await altaUsuario(montaje.deps);
+
+    const salida = montaje.salida.join('\n');
+    expect(salida).toMatch(/2 sesiones abiertas cerradas/);
+    expect(salida).not.toContain(CONTRASENA);
+    expect(salida).not.toContain(HASH);
+    expect(salida).not.toContain('argon2');
+  });
+
+  it('si no se cerró ninguna (un alta nueva), no dice nada de sesiones; la confirmación sigue', async () => {
+    const montaje = montar({ sesionesCerradas: 0 });
+
+    await altaUsuario(montaje.deps);
+
+    expect(montaje.salida.join('\n')).not.toMatch(/sesion|cambiada/i);
+    expect(montaje.salida.join('\n')).toContain('ana');
   });
 });
 
@@ -251,6 +301,30 @@ describe('describirFallo: cómo termina el script', () => {
       mensaje: 'connect ECONNREFUSED',
       codigo: 1,
     });
+  });
+
+  it.each([
+    ['55P03', 'lock_timeout: no se pudo obtener el bloqueo de la fila'],
+    ['40P01', 'deadlock detected'],
+  ])(
+    'un error de Postgres %s (base ocupada) dice que no se ha cambiado nada y que se reintente, sin su texto',
+    (code, textoCrudo) => {
+      const errorDePostgres = Object.assign(new Error(textoCrudo), { code, detail: 'fila ajena' });
+
+      const fallo = describirFallo(errorDePostgres);
+
+      expect(fallo).toEqual({
+        mensaje: 'No se ha cambiado nada: la base de datos estaba ocupada. Vuelve a intentarlo.',
+        codigo: 1,
+      });
+      expect(fallo.mensaje).not.toContain(textoCrudo);
+    },
+  );
+
+  it('control positivo: otro código de Postgres sigue saliendo con su mensaje', () => {
+    const error = Object.assign(new Error('duplicate key'), { code: '23505' });
+
+    expect(describirFallo(error)).toEqual({ mensaje: 'duplicate key', codigo: 1 });
   });
 
   it('lo que no es un Error no se vuelca: mensaje genérico y código 1', () => {

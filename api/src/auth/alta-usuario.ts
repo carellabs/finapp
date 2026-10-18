@@ -31,7 +31,11 @@ export interface DependenciasAlta {
   /** Pregunta SIN eco (la contraseña). */
   readonly preguntarOculto: (pregunta: string) => Promise<string>;
   readonly hashear: (contrasena: string) => Promise<string>;
-  readonly guardar: (nombreUsuario: string, passwordHash: string) => Promise<void>;
+  /** Guarda el usuario (o le cambia la contraseña) y dice cuántas sesiones abiertas cerró. */
+  readonly guardar: (
+    nombreUsuario: string,
+    passwordHash: string,
+  ) => Promise<{ readonly sesionesCerradas: number }>;
   readonly escribir: (linea: string) => void;
 }
 
@@ -75,6 +79,18 @@ export interface FalloDelAlta {
   readonly codigo: number;
 }
 
+const MENSAJE_BASE_OCUPADA =
+  'No se ha cambiado nada: la base de datos estaba ocupada. Vuelve a intentarlo.';
+
+/**
+ * ¿Postgres abortó la transacción por una espera de bloqueo (`55P03`, `lock_timeout`) o un
+ * interbloqueo (`40P01`)? En ambos la transacción se ha revertido entera y se puede repetir.
+ */
+function esBaseOcupada(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false;
+  return error.code === '55P03' || error.code === '40P01';
+}
+
 /**
  * Cómo termina el script cuando algo falla. Lo que no es un `Error` no se vuelca (no se sabe qué
  * lleva); los mensajes de los errores de validación nunca incluyen la contraseña.
@@ -82,6 +98,10 @@ export interface FalloDelAlta {
 export function describirFallo(error: unknown): FalloDelAlta {
   if (error instanceof EntradaCancelada) {
     return { mensaje: 'Cancelado: no se ha creado nada.', codigo: CODIGO_CANCELADO };
+  }
+  if (esBaseOcupada(error)) {
+    // `guardarUsuario` es una transacción: nada se ha cambiado. Sin el texto de Postgres.
+    return { mensaje: MENSAJE_BASE_OCUPADA, codigo: 1 };
   }
   if (error instanceof Error) return { mensaje: error.message, codigo: 1 };
   return { mensaje: 'Error desconocido.', codigo: 1 };
@@ -98,7 +118,15 @@ export async function altaUsuario(deps: DependenciasAlta): Promise<void> {
   const repeticion = await deps.preguntarOculto('Repite la contrasena: ');
   if (contrasena !== repeticion) throw new ErrorAltaUsuario('Las contrasenas no coinciden.');
 
-  await deps.guardar(nombreUsuario, await deps.hashear(contrasena));
+  const { sesionesCerradas } = await deps.guardar(nombreUsuario, await deps.hashear(contrasena));
 
   deps.escribir(`Usuario "${nombreUsuario}" creado/actualizado correctamente.`);
+  if (sesionesCerradas > 0) deps.escribir(avisoSesionesCerradas(sesionesCerradas));
+}
+
+/** Solo el número: ni la contraseña, ni el hash, ni nada de las sesiones (ids, tokens). */
+function avisoSesionesCerradas(cerradas: number): string {
+  const sesiones =
+    cerradas === 1 ? '1 sesion abierta cerrada' : `${String(cerradas)} sesiones abiertas cerradas`;
+  return `Contrasena cambiada. ${sesiones}.`;
 }

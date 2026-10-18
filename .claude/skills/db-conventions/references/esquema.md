@@ -86,7 +86,7 @@ Serie temporal del ahorro declarado (no inferido). `configuracion` clave-valor c
 |---|---|
 | `sesiones_token_hash_key` (único) | verificar una sesión en cada petición y revocar la previa en el login |
 | `sesiones_expiracion` | la purga (`DELETE … WHERE expira_en <= now()`): Index Scan, 0,2 ms |
-| `sesiones_usuario` | la poda del límite por usuario: Bitmap Index Scan y un sort de como mucho N+1 filas, 0,5 ms. Un `(usuario_id, created_at)` no aporta nada: un usuario nunca tiene más de N (≤ 50) sesiones. |
+| `sesiones_usuario` | la poda del límite por usuario: Bitmap Index Scan y un sort de como mucho N+1 filas, 0,5 ms. Un `(usuario_id, created_at)` no aporta nada: un usuario nunca tiene más de N (≤ 50) sesiones. También el cierre de todas las sesiones de un usuario al cambiarle la contraseña (`DELETE … WHERE usuario_id = $1`): Bitmap Index Scan, 0,1 ms con las mismas 5.000 sesiones. |
 
 ## Los dos bugs que el esquema impide (§10), con test
 
