@@ -47,10 +47,3 @@ export async function registrarIntentoFallido(pool: Pool, usuarioId: string): Pr
     [usuarioId, MAX_INTENTOS_FALLIDOS, DURACION_BLOQUEO_MS],
   );
 }
-
-export async function reiniciarIntentosFallidos(pool: Pool, usuarioId: string): Promise<void> {
-  await pool.query(
-    'UPDATE usuarios SET intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = $1',
-    [usuarioId],
-  );
-}

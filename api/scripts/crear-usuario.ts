@@ -1,5 +1,6 @@
 /**
- * Crea el usuario de la aplicacion (o le cambia la contrasena). La contrasena se pide de forma
+ * Crea el usuario de la aplicacion (o le cambia la contrasena y le cierra TODAS las sesiones
+ * abiertas, en la misma transaccion; dice cuantas). La contrasena se pide de forma
  * INTERACTIVA y oculta en una terminal, dos veces: nunca por variable de entorno, argumento ni
  * tuberia, donde quedaria en el historial del shell, en `ps` o en un fichero. Sin terminal,
  * el script falla sin crear nada.

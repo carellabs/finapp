@@ -2,12 +2,7 @@ import { Router } from 'express';
 import { zLogin } from '@finapp/shared';
 import type { Pool } from '../../db/cliente';
 import { verificarContrasena } from '../../auth/contrasena';
-import {
-  buscarUsuarioPorNombre,
-  estaBloqueado,
-  registrarIntentoFallido,
-  reiniciarIntentosFallidos,
-} from '../../auth/bloqueo';
+import { buscarUsuarioPorNombre, estaBloqueado, registrarIntentoFallido } from '../../auth/bloqueo';
 import { crearSesion, revocarSesion } from '../../auth/sesiones';
 import { COOKIE_SESION, leerTokenSesion } from '../../auth/cookie-sesion';
 import { requireSession } from '../../auth/middleware';
@@ -44,13 +39,19 @@ export function crearRutasAuth(
         throw credencialesInvalidas();
       }
 
-      await reiniciarIntentosFallidos(pool, usuario.id);
       // Rotación: la sesión con la que llega el navegador se revoca al crear la nueva.
       // Solo aquí, tras autenticar: un intento fallido no revoca nada.
       const sesion = await crearSesion(pool, usuario.id, {
         maxSesiones: maxSesionesPorUsuario,
         tokenPrevio,
+        // El hash con el que se acaba de verificar la contraseña: `crearSesion` comprueba bajo
+        // el bloqueo que sigue siendo el vigente.
+        passwordHashVerificado: usuario.passwordHash,
       });
+      // La contraseña se cambió mientras este inicio de sesión se autenticaba con la antigua
+      // (o el usuario ya no existe). Es la misma respuesta que una contraseña errónea y NO
+      // cuenta como intento fallido: no es un fallo de contraseña del usuario.
+      if (sesion === null) throw credencialesInvalidas();
 
       res.cookie(COOKIE_SESION, sesion.token, {
         httpOnly: true,

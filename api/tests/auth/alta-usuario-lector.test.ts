@@ -19,7 +19,9 @@ function montar() {
   const salidaTerminal = crearSalida();
   const salida: string[] = [];
   const hashear = vi.fn((_contrasena: string) => Promise.resolve(HASH));
-  const guardar = vi.fn((_nombre: string, _hash: string) => Promise.resolve());
+  const guardar = vi.fn((_nombre: string, _hash: string) =>
+    Promise.resolve({ sesionesCerradas: 0 }),
+  );
   const deps: DependenciasAlta = {
     esInteractivo: true,
     preguntar: () => Promise.resolve('ana'),
