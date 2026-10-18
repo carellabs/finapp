@@ -35,7 +35,7 @@ Estas reglas son la capa de tokens de `estilos.css` — no las reinventes por pa
 - **Iconos: `lucide-react` siempre, nunca emoji ni SVG a mano.** `strokeWidth={1.4}`, color `verde`, 15 px en filas, 19–22 px en navegación/opciones. El mapa categoría → icono vive en `lib/iconos-categoria.ts` — amplíalo ahí, no inline.
 - **Modo claro y oscuro vía `[data-tema]` en `<html>`**, no `prefers-color-scheme` directo en componentes — ya está resuelto en `estilos.css` + `lib/tema.ts`.
 - **Cualquier flujo nuevo de captura por pasos** (una pregunta a la vez, con lo respondido apilado arriba) se construye sobre `organisms/FlujoPorPasos.tsx` + los átomos `TarjetaOpcion`, `RejillaOpciones`, `TecladoImporte`, `ChipSeleccion`, `ChipEditable`, `PasoApilado` — no levantes un wizard nuevo desde cero. Alta rápida, declarar saldo y objetivo secundario ya lo usan; es el patrón de referencia. `FlujoPorPasos` ya mueve el foco a la pregunta en cada cambio de paso (se anuncia solo a lectores de pantalla) — no dupliques esa lógica en el consumidor.
-- **El paso de importe se construye con `molecules/EntradaImporte.tsx`** (cifra + `TecladoImporte` + Continuar), nunca repitiendo el bloque a mano: ya trae `role="status"` para que el importe se anuncie según se teclea.
+- **El paso de importe se construye con `molecules/EntradaImporte.tsx`** (cifra + `TecladoImporte` + Continuar), nunca repitiendo el bloque a mano: ya trae `role="status"` para que el importe se anuncie según se teclea, y el tope de la API (`MAX_IMPORTE_CENTS`): por encima avisa con `MOTIVO_IMPORTE_MAXIMO` y no deja continuar. Un `zEsquema.parse(...)` en un manejador de React que lance no se ve (botón muerto): la puerta va antes (aquí, en el paso del importe) o se usa `safeParse`.
 
 ## Decision Gates
 

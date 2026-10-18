@@ -50,6 +50,10 @@ export function ListaObjetivosSecundarios({
   }
 
   function guardar(): void {
+    // `parse` lanza (y en un manejador de React nadie lo ve) si algo no valida. Aquí no puede pasar:
+    // "Continuar" no se habilita con nombre vacío (paso 1) ni con un importe 0 o por encima de
+    // `MAX_IMPORTE_CENTS` (`EntradaImporte`, paso 2). Si se añade otra regla al esquema, hay que
+    // darle su puerta antes de este punto o pasar a `safeParse`.
     const entrada: NuevoObjetivoEntrada = zNuevoObjetivo.parse({
       tipo: 'secundario',
       nombre,

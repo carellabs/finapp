@@ -48,4 +48,44 @@ describe('EntradaImporte', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continuar' }));
     expect(onContinuar).toHaveBeenCalledTimes(1);
   });
+
+  // Issue #29: el mismo tope que la API en el paso de importe que comparten el alta rápida, el
+  // objetivo secundario y la conciliación, para que nadie llegue al envío con un importe que se rechaza.
+  describe('tope de la API (MAX_IMPORTE_CENTS)', () => {
+    function teclear(texto: string): void {
+      for (const tecla of texto) fireEvent.click(screen.getByRole('button', { name: tecla }));
+    }
+
+    it('10.000.000.000,00 € avisa del máximo y no deja continuar', () => {
+      render(<Wrapper />);
+
+      teclear('10000000000');
+
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        /El importe no puede superar 9\.999\.999\.999,99\s€/,
+      );
+      expect(screen.getByRole('button', { name: 'Continuar' })).toBeDisabled();
+    });
+
+    it('9.999.999.999,99 € (el tope exacto) deja continuar y no avisa (control positivo)', () => {
+      const onContinuar = vi.fn();
+      render(<Wrapper onContinuar={onContinuar} />);
+
+      teclear('9999999999,99');
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Continuar' }));
+      expect(onContinuar).toHaveBeenCalledTimes(1);
+    });
+
+    it('el aviso desaparece al borrar hasta un importe válido', () => {
+      render(<Wrapper inicial="10000000000" />);
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Borrar' }));
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Continuar' })).toBeEnabled();
+    });
+  });
 });

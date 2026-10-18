@@ -13,6 +13,7 @@ export {
   sumar,
 } from './money/cents';
 export { formatearEuros, formatearPorcentaje } from './money/formato';
+export { MAX_IMPORTE_CENTS, MOTIVO_IMPORTE_MAXIMO, cabeEnColumnaDeImporte } from './money/limite';
 
 export type { FechaISO } from './time/fecha';
 export { compararFechas, esFechaISOValida, fechaISO } from './time/fecha';

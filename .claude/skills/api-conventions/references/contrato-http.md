@@ -40,9 +40,25 @@ Código por estado (lo fija el manejador central, `api/src/http/errores.ts`; el 
 | 409 | `CONFLICTO` | violación de constraint (FK, unique), o una operación concurrente retuvo un bloqueo más de 5 s (`lock_timeout`): el cliente puede reintentar |
 | 413 | `PAYLOAD_DEMASIADO_GRANDE` | cuerpo por encima del límite |
 | 415 | `TIPO_NO_SOPORTADO` | `Content-Encoding` o `charset` que el lector del cuerpo no soporta |
-| 422 | `VALIDACION_FALLIDA` | Zod, con `detalles` |
+| 422 | `VALIDACION_FALLIDA` | Zod, con `detalles`; o, sin `detalles`, un `22003` de Postgres (ver "Tope de los importes") |
 | 429 | `DEMASIADAS_PETICIONES` | un limitador de peticiones (el global o el de login) se ha superado; conserva `Retry-After` y las cabeceras `RateLimit-*` |
 | 500 | `ERROR_INTERNO` | cualquier otro fallo |
+
+## Tope de los importes
+
+Todo importe de entrada (`montoCents`, `adeudadoCents`, `saldoInicialCents`, `pagoMensualCents`, `importeObjetivoCents`, `saldoCents`; en `POST`, `PUT` y `PATCH`) admite como máximo `MAX_IMPORTE_CENTS` = **999 999 999 999 céntimos (9.999.999.999,99 €)**, la capacidad de las columnas `numeric(12, 2)`. Una sola constante en `@finapp/shared`; subirla o bajarla es cambiar esa constante. Por encima, `422` y nada llega a la base de datos:
+
+```json
+{ "error": {
+    "codigo": "VALIDACION_FALLIDA",
+    "mensaje": "La peticion no se ha podido procesar",
+    "detalles": [ { "campo": "montoCents", "motivo": "El importe no puede superar 9.999.999.999,99 €" } ],
+    "request_id": "…" } }
+```
+
+El motivo no repite el valor recibido. Un número descomunal (`1e21`, ni siquiera entero seguro) da también UN solo error, el del tope: va primero y con `abort`. El tope solo acota valores sueltos: los importes **derivados** los controla quien los calcula. CSM y objetivo (`objetivo_historico`) los escribe la tarea programada, que omite el mes si no caben (ver `objetivos-ahorro`); y el write-off de un préstamo (`ejecutarMarcarIncobrable`) escribe en una petición un Gasto por el pendiente, acotado por pendiente ≤ adeudado ≤ tope (lo vigila un test de integración con un préstamo en el tope).
+
+Segunda barrera: si un `22003` (`numeric_value_out_of_range`) llegara de Postgres, `errores.ts` lo traduce a `422` `VALIDACION_FALLIDA` **sin `detalles`** (solo Zod sabe el campo). El mapeo es por CÓDIGO, no por importe (un entero fuera de rango en un `LIMIT` daría lo mismo), así que el mensaje del log es «Valor numérico fuera de rango» y la causa fija `numero_fuera_de_rango`. Es correcto como respuesta al cliente porque en una petición el valor que no cabe viene de él (lo derivado lo escribe la tarea programada, salvo el write-off de un préstamo, acotado por el tope), pero es un fallo nuestro (un validador dejó pasar el valor), así que el log lo registra con nivel `error`. Ni la respuesta ni el log llevan el mensaje ni el `detail` de Postgres, que puede traer el valor. Lo vigila un test de integración con un `22003` real de pg.
 
 ## Origen de las peticiones que modifican datos (CSRF)
 

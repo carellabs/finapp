@@ -24,7 +24,7 @@ Leer ANTES de escribir o modificar código que:
 4. **Referencia a categoría siempre por `id` (FK).** Nunca por nombre, nunca por posición. Renombrar una categoría no altera ni un dato histórico.
 5. **Presupuestos y objetivo de ahorro se calculan sobre Ingreso Recurrente**, nunca sobre Ingreso Total.
 6. **Presupuesto vigente = fila explícita `(categoria_id, mes_cobertura)`.** Sin fila = sin presupuesto = sin alerta. Prohibido heredar del mes anterior.
-7. **Dinero en céntimos enteros (`Cents`).** Prohibido `float` y `number` decimal. Ver `../db-conventions/SKILL.md`.
+7. **Dinero en céntimos enteros (`Cents`).** Prohibido `float` y `number` decimal. Ver `../db-conventions/SKILL.md`. Un importe de entrada no supera `MAX_IMPORTE_CENTS` (999 999 999 999 céntimos: la capacidad de `numeric(12, 2)`); los derivados (CSM, objetivo) pueden superarlo y se tratan aparte (`../objetivos-ahorro/SKILL.md`).
 8. **Mes cerrado = `mes_cobertura` < mes actual**, según el `Clock` inyectado en zona `Europe/Madrid`. Prohibido `new Date()` directo en dominio.
 9. **Si falta un dato, falla ruidosamente.** Prohibido fallback silencioso, mock o valor inventado.
 

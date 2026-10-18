@@ -12,6 +12,10 @@ const NOMBRE_TAREA = 'foto-mensual-objetivos';
  * cuanto un mes se cierra (medianoche de Madrid), la siguiente ejecución lo fotografía.
  * Deja en el log cuántas creó: solo el número, nunca importes ni ids.
  *
+ * Si el objetivo de un mes no cabe en la columna (ver `ImporteDerivadoFueraDeRango`), esa foto se
+ * omite y se avisa con un `warn` (el mes y un motivo fijo, nunca una cantidad). Como el mes se
+ * reintenta en cada pasada, el aviso sale UNA sola vez por mes y por proceso, no una por hora.
+ *
  * Se arranca desde `main.ts` a través de `arrancar()`, no desde `crearApp`.
  */
 export function iniciarFotoMensualObjetivos(
@@ -20,12 +24,23 @@ export function iniciarFotoMensualObjetivos(
   intervaloMinutos: number,
   registrar: Registrar = registrarEnConsola,
 ): TareaPeriodica {
+  const avisados = new Set<string>();
+
   return iniciarTareaPeriodica({
     nombre: NOMBRE_TAREA,
     intervaloMs: intervaloMinutos * 60_000,
     registrar,
     tarea: async () => {
-      const creadas = await generarFotosPendientes(pool, clock);
+      const creadas = await generarFotosPendientes(pool, clock, (mes) => {
+        if (avisados.has(mes)) return;
+        avisados.add(mes);
+        registrar({
+          nivel: 'warn',
+          mensaje: 'foto mensual de objetivos omitida: el objetivo no cabe en la columna',
+          tarea: NOMBRE_TAREA,
+          mes,
+        });
+      });
       registrar({
         nivel: 'info',
         mensaje: 'fotos mensuales de objetivos generadas',

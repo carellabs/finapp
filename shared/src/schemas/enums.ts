@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_IMPORTE_CENTS, MOTIVO_IMPORTE_MAXIMO } from '../money/limite';
 import { esFechaISOValida } from '../time/fecha';
 
 /**
@@ -34,10 +35,24 @@ export const zMesCobertura = z
  */
 export const zFechaISO = z.string().refine(esFechaISOValida, 'Fecha inexistente o mal formada');
 
-/** Céntimos enteros positivos: el signo lo determina `tipo`, nunca el importe (§2.1). */
-export const zMontoCents = z.number().int().positive();
+/**
+ * Céntimos enteros positivos: el signo lo determina `tipo`, nunca el importe (§2.1). Con tope
+ * (`MAX_IMPORTE_CENTS`, el de las columnas `numeric(12, 2)`): sin él, un importe mayor llegaba a
+ * Postgres y volvía como 500. El motivo no lleva el valor recibido. El tope va PRIMERO y con `abort`:
+ * un número descomunal (1e21) no es ni entero seguro, y sin esto salían dos errores para el mismo
+ * campo, uno en inglés de Zod.
+ */
+export const zMontoCents = z
+  .number()
+  .max(MAX_IMPORTE_CENTS, { error: MOTIVO_IMPORTE_MAXIMO, abort: true })
+  .int()
+  .positive();
 
 /** Como `zMontoCents` pero admite 0 (p.ej. una deuda con saldo inicial 0 al darla de alta ya pagada). */
-export const zMontoCentsNoNegativo = z.number().int().min(0);
+export const zMontoCentsNoNegativo = z
+  .number()
+  .max(MAX_IMPORTE_CENTS, { error: MOTIVO_IMPORTE_MAXIMO, abort: true })
+  .int()
+  .min(0);
 
 export const zUuid = z.string().uuid();

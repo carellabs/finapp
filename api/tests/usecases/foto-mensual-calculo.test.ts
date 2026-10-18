@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONFIGURACION_OBJETIVOS_POR_DEFECTO,
+  MAX_IMPORTE_CENTS,
   cents,
   fechaISO,
   mesCobertura,
   type MesCobertura,
   type Transaccion,
 } from '@finapp/shared';
-import { calcularFotoDelMes, mesesPendientesDeFoto } from '../../src/usecases/foto-mensual-calculo';
+import {
+  ImporteDerivadoFueraDeRango,
+  calcularFotoDelMes,
+  mesesPendientesDeFoto,
+} from '../../src/usecases/foto-mensual-calculo';
 
 const mes = mesCobertura;
 const meses = (...valores: string[]) => valores.map(mesCobertura);
@@ -205,5 +210,82 @@ describe('calcularFotoDelMes', () => {
       margenSeguridad: 0.2,
       mesesObjetivo: 3,
     });
+  });
+});
+
+describe('calcularFotoDelMes: el objetivo derivado tiene que caber en numeric(12, 2)', () => {
+  const VIVIENDA = 'categoria-vivienda';
+  const config = CONFIGURACION_OBJETIVOS_POR_DEFECTO;
+
+  /** Un único gasto esencial recurrente en mayo; la foto de junio lo usa entero como base. */
+  function fotoConBase(base: number, configuracion = config) {
+    return calcularFotoDelMes({
+      transacciones: [
+        {
+          id: 'x',
+          fecha: fechaISO('2026-05-05'),
+          mesCobertura: mes('2026-05'),
+          tipo: 'Gasto',
+          categoriaId: VIVIENDA,
+          monto: cents(base),
+          direccion: null,
+          necesidad: 'Esencial',
+          recurrencia: 'Recurrente',
+          prestamoId: null,
+        },
+      ],
+      categoriasDeuda: new Set(),
+      mesesConDatos: meses('2026-05'),
+      ahorroDeclarado: cents(0),
+      mes: mes('2026-06'),
+      config: configuracion,
+    });
+  }
+
+  // Con el margen del 15 % y 6 meses, objetivo = base x 6,9: el mayor que cabe es 144.927.536.231.
+  it('en el límite exacto la foto sale (control positivo)', () => {
+    const foto = fotoConBase(144_927_536_231);
+
+    expect(foto.csm).toBe(166_666_666_666);
+    expect(foto.objetivo).toBe(999_999_999_996);
+    expect(foto.objetivo).toBeLessThanOrEqual(MAX_IMPORTE_CENTS);
+  });
+
+  it('un céntimo de base más y el objetivo ya no cabe: error propio, con el mes', () => {
+    let error: unknown;
+    try {
+      fotoConBase(144_927_536_232);
+    } catch (e) {
+      error = e;
+    }
+
+    expect(error).toBeInstanceOf(ImporteDerivadoFueraDeRango);
+    expect((error as ImporteDerivadoFueraDeRango).mes).toBe('2026-06');
+  });
+
+  it('un gasto igual al tope de entrada (legal) desborda el objetivo', () => {
+    expect(() => fotoConBase(MAX_IMPORTE_CENTS)).toThrow(ImporteDerivadoFueraDeRango);
+  });
+
+  it('también se comprueba el CSM por sí solo (si el objetivo fuera menor que él)', () => {
+    // 0,5 meses de objetivo no existe en la base de datos, pero esta función no lo sabe:
+    // base 869.565.217.391 -> CSM 1.000.000.000.000 (no cabe); objetivo 500.000.000.000.
+    const rara = { ...config, mesesObjetivo: 0.5 };
+
+    expect(() => fotoConBase(869_565_217_389, rara)).not.toThrow();
+    expect(() => fotoConBase(869_565_217_391, rara)).toThrow(ImporteDerivadoFueraDeRango);
+  });
+
+  it('el mensaje del error no lleva ningún importe', () => {
+    let error: Error | undefined;
+    try {
+      fotoConBase(MAX_IMPORTE_CENTS);
+    } catch (e) {
+      error = e as Error;
+    }
+
+    expect(error).toBeDefined();
+    expect(error!.message).not.toMatch(/\d{3}/);
+    expect(error!.name).toBe('ImporteDerivadoFueraDeRango');
   });
 });
