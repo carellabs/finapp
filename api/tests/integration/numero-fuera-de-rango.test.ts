@@ -27,12 +27,16 @@ afterAll(async () => {
   await pool.end();
 });
 
-function crearAppDePrueba(): express.Express {
+/**
+ * Una app mínima cuya única "ruta" falla con el error que se le da. El error de Postgres se provoca
+ * FUERA de la ruta, en el propio test: así la ruta no accede a la base de datos (no es una ruta
+ * real, y el análisis de CodeQL la vería sin límite de peticiones), y el error que llega al
+ * manejador central sigue siendo el objeto real del driver.
+ */
+function crearAppDePrueba(error: unknown): express.Express {
   const app = express();
-  // Una "ruta" a la que se le escapó el validador: manda el importe tal cual a la base de datos.
-  app.post('/sin-validar', async (_req, res) => {
-    await pool.query(SENTENCIA, ['2026-07-01', DEMASIADO_GRANDE]);
-    res.status(201).end();
+  app.post('/sin-validar', (_req, _res, next) => {
+    next(error);
   });
   app.use(manejadorErrores);
   return app;
@@ -54,7 +58,8 @@ describe('un 22003 real de Postgres llega al manejador de errores', () => {
       .query(SENTENCIA, ['2026-07-01', DEMASIADO_GRANDE])
       .catch((e: unknown) => e)) as Error & { detail?: string; where?: string };
 
-    const respuesta = await request(crearAppDePrueba()).post('/sin-validar');
+    expect(errorDePg).toMatchObject({ code: '22003' });
+    const respuesta = await request(crearAppDePrueba(errorDePg)).post('/sin-validar');
 
     expect(respuesta.status).toBe(422);
     const error = (respuesta.body as { error: Record<string, unknown> }).error;
