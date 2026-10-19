@@ -76,7 +76,9 @@ createServer((req, res) => {
   req.on('end', () => {
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    res.setHeader('Content-Security-Policy', "default-src 'none'");
+    // Lo que pone la API real (api/src/http/cabeceras.ts): la CSP de una respuesta JSON y no-store.
+    res.setHeader('Content-Security-Policy', "default-src 'none';frame-ancestors 'none'");
+    res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Eco-Api', 'si');
     res.end(JSON.stringify({
       metodo: req.method,
