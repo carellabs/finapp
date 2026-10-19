@@ -89,31 +89,57 @@ createServer((req, res) => {
 }).listen(3000);
 `;
 
-/** Peticion HTTP sin dependencias. Devuelve estado, cabeceras (sin duplicar) y cuerpo. */
-export function pedir(url, { metodo = 'GET', cabeceras = {}, cuerpo, troceado = false } = {}) {
+/** Errores de un socket al que el otro extremo ha cortado la conexion mientras se escribia. */
+const CODIGOS_CORTE = ['EPIPE', 'ECONNRESET'];
+
+/**
+ * Peticion HTTP sin dependencias. Devuelve estado, cabeceras (sin duplicar) y cuerpo.
+ *
+ * `toleraCorte`: para un cuerpo grande que el servidor puede rechazar antes de que acabe el envio
+ * (Caddy responde 413 y cierra). Si la conexion se corta (`EPIPE`/`ECONNRESET`) DESPUES de recibir la
+ * cabecera de la respuesta, se devuelve esa respuesta (con el cuerpo que llego; `cortada: true`) en
+ * vez de rechazar. Sin respuesta no se puede saber el estado: rechaza con el error. Sin esta opcion,
+ * cualquier error rechaza, como siempre.
+ * @param {string} url
+ * @param {{ metodo?: string, cabeceras?: Record<string, unknown>, cuerpo?: string, troceado?: boolean, toleraCorte?: boolean }} [opciones]
+ */
+export function pedir(
+  url,
+  { metodo = 'GET', cabeceras = {}, cuerpo, troceado = false, toleraCorte = false } = {},
+) {
   return new Promise((listo, falla) => {
+    // La respuesta, en cuanto llega su cabecera: lo que se devuelve si despues la conexion se corta.
+    let hastaAhora = null;
     // `agent: false`: una conexion por peticion. Con keep-alive, tras un 413 que corta el cuerpo a medias,
     // la siguiente peticion reutilizaria un socket con restos de la anterior.
     // `troceado`: el cuerpo sale en trozos de 100 kB, sin Content-Length (Transfer-Encoding: chunked).
     const encabezados = troceado ? { ...cabeceras, 'Transfer-Encoding': 'chunked' } : cabeceras;
     const req = request(url, { method: metodo, headers: encabezados, agent: false }, (res) => {
       const trozos = [];
-      res.on('data', (t) => trozos.push(t));
-      res.on('end', () => {
+      const resumen = () => {
         // `rawHeaders` conserva las cabeceras repetidas (`headers` las funde con ", ").
         const lineas = [];
         for (let i = 0; i < res.rawHeaders.length; i += 2) {
           lineas.push([res.rawHeaders[i].toLowerCase(), res.rawHeaders[i + 1]]);
         }
-        listo({
+        return {
           estado: res.statusCode,
           cabeceras: res.headers,
           lineas,
           cuerpo: Buffer.concat(trozos).toString('utf8'),
-        });
-      });
+        };
+      };
+      hastaAhora = () => ({ ...resumen(), cortada: true });
+      res.on('data', (t) => trozos.push(t));
+      res.on('end', () => listo(resumen()));
     });
-    req.on('error', falla);
+    req.on('error', (error) => {
+      if (toleraCorte && hastaAhora !== null && CODIGOS_CORTE.includes(error.code)) {
+        listo(hastaAhora());
+      } else {
+        falla(error);
+      }
+    });
     req.setTimeout(15_000, () => req.destroy(new Error(`tiempo agotado: ${url}`)));
     if (troceado && cuerpo !== undefined) {
       for (let i = 0; i < cuerpo.length; i += 100_000) req.write(cuerpo.slice(i, i + 100_000));
@@ -122,6 +148,40 @@ export function pedir(url, { metodo = 'GET', cabeceras = {}, cuerpo, troceado = 
       req.end(cuerpo);
     }
   });
+}
+
+/** Intentos por defecto de `pedirRechazable`. */
+export const INTENTOS_CORTE = 5;
+
+/**
+ * Como `pedir`, para enviar un cuerpo grande a un servidor que puede rechazarlo y cortar antes de que
+ * acabe el envio (Caddy con `request_body { max_size }`: 413 y cierre, RFC 9110 15.5.14).
+ *
+ * En el cliente, `EPIPE`/`ECONNRESET` llega a veces antes que la respuesta, y un RST puede llevarse la
+ * respuesta sin leer: pasa casi siempre y falla segun una carrera. Por eso:
+ *  - si la cabecera de la respuesta llego antes del corte, se devuelve esa respuesta;
+ *  - si no llego, se reintenta la MISMA peticion, hasta `intentos` en total y SOLO ante
+ *    `EPIPE`/`ECONNRESET`; agotados, lanza un error claro (con el ultimo como `cause`);
+ *  - una respuesta, sea cual sea su estado, se devuelve tal cual (no se reintenta ni se oculta), y
+ *    cualquier otro error (conexion rechazada, tiempo agotado...) lanza a la primera.
+ * @param {string} url
+ * @param {Parameters<typeof pedir>[1]} [opciones]
+ * @param {{ intentos?: number }} [reintentos]
+ */
+export async function pedirRechazable(url, opciones = {}, { intentos = INTENTOS_CORTE } = {}) {
+  let ultimo;
+  for (let intento = 1; intento <= intentos; intento += 1) {
+    try {
+      return await pedir(url, { ...opciones, toleraCorte: true });
+    } catch (error) {
+      if (!CODIGOS_CORTE.includes(error.code)) throw error;
+      ultimo = error;
+    }
+  }
+  throw new Error(
+    `${intentos} intentos de ${opciones.metodo ?? 'GET'} ${url} cortados (${ultimo.code}) sin recibir respuesta`,
+    { cause: ultimo },
+  );
 }
 
 /** Valores de una cabecera en las lineas crudas de la respuesta (una por cada aparicion). */
