@@ -35,6 +35,10 @@ export interface DetalleCampoApi {
   motivo: string;
 }
 
+/**
+ * El error tal y como lo usa la web (ya traducido). El del backend llega como `request_id`;
+ * `errorDesdeCuerpo` es el único sitio que lo convierte en `requestId`.
+ */
 export interface ErrorApi {
   codigo: string;
   mensaje: string;
@@ -42,17 +46,75 @@ export interface ErrorApi {
   detalles?: DetalleCampoApi[];
 }
 
+/** Un `request_id` es un UUID (36 caracteres); el tope deja holgura sin dar cabida a un cuerpo hostil. */
+const LONGITUD_MAXIMA_REQUEST_ID = 100;
+
+/**
+ * Alfabeto de un `request_id`: el servidor lo genera con `randomUUID()` (letras, dígitos y guiones).
+ * Se deja holgura (guion bajo, cualquier longitud hasta el tope) por si cambia el generador, pero
+ * nada que pueda alterar una pantalla o un enlace (`mailto:`): ni saltos de línea, ni `?`, `&`, `<`,
+ * espacios, emojis o letras con tilde. Con `+` el texto vacío tampoco casa.
+ */
+const FORMATO_REQUEST_ID = /^[A-Za-z0-9_-]+$/;
+
+const ERROR_RESPUESTA_INVALIDA: ErrorApi = {
+  codigo: 'RESPUESTA_INVALIDA',
+  mensaje: 'El servidor devolvió una respuesta inesperada',
+};
+
+function esObjeto(valor: unknown): valor is Record<string, unknown> {
+  return typeof valor === 'object' && valor !== null;
+}
+
+/**
+ * Traduce el cuerpo de una respuesta de error (`{ error: { codigo, mensaje, request_id, detalles? } }`,
+ * ver contrato-http.md) al `ErrorApi` de la web. El cuerpo no es de fiar (un proxy, Caddy o un
+ * intermediario pueden devolver cualquier cosa): sin el sobre, o sin `codigo`/`mensaje` en texto,
+ * es `RESPUESTA_INVALIDA`; y el `request_id` solo vale si es un texto de 1 a
+ * `LONGITUD_MAXIMA_REQUEST_ID` caracteres de `FORMATO_REQUEST_ID`, para que un id hostil no acabe
+ * en pantalla ni en un enlace.
+ */
+export function errorDesdeCuerpo(cuerpo: unknown): ErrorApi {
+  const error = esObjeto(cuerpo) ? cuerpo['error'] : undefined;
+  if (
+    !esObjeto(error) ||
+    typeof error['codigo'] !== 'string' ||
+    typeof error['mensaje'] !== 'string'
+  ) {
+    return ERROR_RESPUESTA_INVALIDA;
+  }
+
+  const id = error['request_id'];
+  const requestId =
+    typeof id === 'string' && id.length <= LONGITUD_MAXIMA_REQUEST_ID && FORMATO_REQUEST_ID.test(id)
+      ? id
+      : undefined;
+  const detalles = Array.isArray(error['detalles'])
+    ? (error['detalles'] as DetalleCampoApi[])
+    : undefined;
+
+  return {
+    codigo: error['codigo'],
+    mensaje: error['mensaje'],
+    ...(requestId === undefined ? {} : { requestId }),
+    ...(detalles === undefined ? {} : { detalles }),
+  };
+}
+
 /** Único punto de la app que conoce el sobre `{data}`/`{error}` del backend. */
 export class ErrorPeticion extends Error {
   readonly status: number;
   readonly codigo: string;
   readonly detalles: DetalleCampoApi[];
+  /** Id de la petición, para cruzar el fallo que ve el usuario con su línea del log. */
+  readonly requestId: string | undefined;
 
   constructor(status: number, error: ErrorApi) {
     super(error.mensaje);
     this.status = status;
     this.codigo = error.codigo;
     this.detalles = error.detalles ?? [];
+    this.requestId = error.requestId;
   }
 }
 
@@ -98,14 +160,11 @@ async function peticion<T>(ruta: string, opciones: OpcionesPeticion = {}): Promi
   try {
     cuerpoJson = await respuesta.json();
   } catch {
-    throw new ErrorPeticion(respuesta.status, {
-      codigo: 'RESPUESTA_INVALIDA',
-      mensaje: 'El servidor devolvió una respuesta inesperada',
-    });
+    throw new ErrorPeticion(respuesta.status, ERROR_RESPUESTA_INVALIDA);
   }
 
   if (!respuesta.ok) {
-    throw new ErrorPeticion(respuesta.status, (cuerpoJson as { error: ErrorApi }).error);
+    throw new ErrorPeticion(respuesta.status, errorDesdeCuerpo(cuerpoJson));
   }
 
   return (cuerpoJson as { data: T }).data;
