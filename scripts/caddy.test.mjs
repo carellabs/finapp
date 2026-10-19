@@ -377,7 +377,12 @@ describe('Caddy en marcha, con la imagen oficial y el Caddyfile del repo', () =>
       const r = await pedirACaddy('/api/v1/meses');
 
       // Las pone la API falsa, como helmet pone las suyas: Caddy no las duplica ni las cambia.
-      assert.deepEqual(valoresDe(r, 'content-security-policy'), ["default-src 'none'"]);
+      // Las mismas que fija la API real (api/src/http/cabeceras.ts): la CSP de una respuesta JSON y,
+      // sobre todo, `no-store`, que Caddy no debe pisar con el `no-cache` de las paginas.
+      assert.deepEqual(valoresDe(r, 'content-security-policy'), [
+        "default-src 'none';frame-ancestors 'none'",
+      ]);
+      assert.deepEqual(valoresDe(r, 'cache-control'), ['no-store']);
       assert.deepEqual(valoresDe(r, 'strict-transport-security'), [
         'max-age=31536000; includeSubDomains',
       ]);
@@ -388,7 +393,6 @@ describe('Caddy en marcha, con la imagen oficial y el Caddyfile del repo', () =>
         'permissions-policy',
         'cross-origin-opener-policy',
         'x-content-type-options',
-        'cache-control',
       ]) {
         assert.deepEqual(valoresDe(r, cabecera), [], `Caddy anade ${cabecera} a /api`);
       }
