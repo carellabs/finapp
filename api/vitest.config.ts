@@ -6,6 +6,14 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     // Los de integracion necesitan una BD viva: van por `test:integration`.
     exclude: ['tests/integration/**'],
+    // Margen frente a la saturacion de la maquina, NO para tests lentos (un test colgado sigue
+    // fallando en segundos). Medido el 18-oct-2026 con 12 procesos de CPU en bucle (12 nucleos):
+    // los tests de la primera peticion de supertest (`log-sin-fragmentos`, `ip-cliente`,
+    // `limite-excedido`) pasan de 1,2-1,9 s libres a 3,3-4,7 s, hasta el 94 % del limite de 5 s,
+    // y las propiedades de fast-check de `redaccion` de 2,4 s a 5-7 s. Los tests que lanzan
+    // procesos llevan su timeout propio (TIMEOUT_TEST_PROCESO_MS). No subirlo sin medir antes en
+    // maquina libre y bajo carga (skill testing-strategy, regla 8).
+    testTimeout: 15_000,
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

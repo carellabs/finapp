@@ -161,21 +161,29 @@ const ESPERA_DEL_CAMBIO = 'INSERT INTO usuarios';
 const ESPERA_DE_CREAR_SESION = 'SELECT password_hash FROM usuarios';
 
 /**
- * Tope del sondeo. Es MENOR que el `lock_timeout` de 5 s del pool: quien espera el bloqueo falla
- * con 55P03 a los 5 s de empezar a esperar, y si el sondeo aguantara tanto como eso, en un runner
- * lento el test se caería por 55P03 antes de poder soltar el bloqueo. Con 4 s, si lo que debería
- * esperar no espera, el fallo sale como un error claro de este helper y quedan 1 s de margen
- * sobre el timeout. No se sube el `lock_timeout` de esas llamadas: lo fija `crearPool` (el de
- * producción) y cambiarlo aquí probaría otra configuración.
+ * Espera a que una conexión esté parada en un bloqueo de fila ejecutando una sentencia cuyo
+ * texto contiene `sentencia`: así el test sabe QUÉ está esperando, no solo que algo espera.
+ *
+ * Sin un tope en segundos: cuánto tarda la operación en vuelo en LLEGAR al bloqueo depende de la
+ * máquina (un login verifica primero un hash Argon2 y pasa por HTTP; con la CPU saturada son
+ * más de 4 s, que era el tope anterior). Lo que no depende de la velocidad es que, si la
+ * operación en vuelo TERMINA sin haber esperado nunca, nadie va a esperar ya: eso es el fallo
+ * claro. Si se cuelga de verdad, lo corta el timeout del test. El `lock_timeout` de 5 s del
+ * pool corre para quien espera DESDE que espera, no mientras se le sondea.
  */
-const TOPE_SONDEO_MS = 4_000;
-
-/**
- * Espera (acotado) a que una conexión esté parada en un bloqueo de fila ejecutando una sentencia
- * cuyo texto contiene `sentencia`: así el test sabe QUÉ está esperando, no solo que algo espera.
- */
-async function esperarUnaEsperaDeBloqueo(sentencia: string): Promise<void> {
-  const inicio = Date.now();
+async function esperarUnaEsperaDeBloqueo(
+  sentencia: string,
+  enVuelo: Promise<unknown>,
+): Promise<void> {
+  let terminada = false;
+  void enVuelo.then(
+    () => {
+      terminada = true;
+    },
+    () => {
+      terminada = true;
+    },
+  );
   for (;;) {
     const { rows } = await pool.query<{ n: string }>(
       `SELECT count(*) AS n FROM pg_stat_activity
@@ -184,7 +192,7 @@ async function esperarUnaEsperaDeBloqueo(sentencia: string): Promise<void> {
       [sentencia],
     );
     if (Number(rows[0]!.n) > 0) return;
-    if (Date.now() - inicio > TOPE_SONDEO_MS) {
+    if (terminada) {
       throw new Error(`nadie está esperando un bloqueo con la sentencia: ${sentencia}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -403,7 +411,7 @@ describe('el cambio de contraseña se serializa con los inicios de sesión', () 
     try {
       cambio = guardarUsuario(pool, 'ana', 'hash-nuevo');
       // El cambio está parado en el bloqueo del usuario: no se ha adelantado a nadie.
-      await esperarUnaEsperaDeBloqueo(ESPERA_DEL_CAMBIO);
+      await esperarUnaEsperaDeBloqueo(ESPERA_DEL_CAMBIO, cambio);
       await enCurso.cliente.query(
         `INSERT INTO sesiones (usuario_id, token_hash, expira_en)
          VALUES ($1, $2, now() + interval '30 days')`,
@@ -529,7 +537,7 @@ describe('crearSesion: comprueba bajo el bloqueo que la contraseña verificada s
       ]);
       creacion = crearSesion(pool, ana, opciones('hash-viejo'));
       // El login está parado en el bloqueo: no ha mirado el hash antes de tenerlo.
-      await esperarUnaEsperaDeBloqueo(ESPERA_DE_CREAR_SESION);
+      await esperarUnaEsperaDeBloqueo(ESPERA_DE_CREAR_SESION, creacion);
       await cambio.confirmar();
 
       expect(await creacion).toBeNull();
@@ -546,7 +554,7 @@ describe('crearSesion: comprueba bajo el bloqueo que la contraseña verificada s
     let creacion: ReturnType<typeof crearSesion> | undefined;
     try {
       creacion = crearSesion(pool, ana, opciones('hash-viejo'));
-      await esperarUnaEsperaDeBloqueo(ESPERA_DE_CREAR_SESION);
+      await esperarUnaEsperaDeBloqueo(ESPERA_DE_CREAR_SESION, creacion);
       await otra.confirmar();
 
       expect(await creacion).not.toBeNull();
@@ -577,7 +585,7 @@ describe('POST /auth/login con un cambio de contraseña en curso', () => {
       // `SELECT … FOR NO KEY UPDATE` de `crearSesion`: la primera sentencia suya que toca la fila
       // retenida (el sondeo comprueba que la parada es exactamente esa).
       enVuelo = login('ana', VIEJA);
-      await esperarUnaEsperaDeBloqueo(ESPERA_DE_CREAR_SESION);
+      await esperarUnaEsperaDeBloqueo(ESPERA_DE_CREAR_SESION, enVuelo);
       await cambio.confirmar();
 
       const resultado = await enVuelo;
@@ -637,7 +645,7 @@ describe('POST /auth/login con un cambio de contraseña en curso', () => {
       // El login lee el estado confirmado (hash viejo, sin bloqueo), verifica la contraseña vieja
       // y se para en el `SELECT … FOR NO KEY UPDATE` de `crearSesion`.
       enVuelo = login('ana', VIEJA);
-      await esperarUnaEsperaDeBloqueo(ESPERA_DE_CREAR_SESION);
+      await esperarUnaEsperaDeBloqueo(ESPERA_DE_CREAR_SESION, enVuelo);
       await cambio.confirmar();
 
       const resultado = await enVuelo;

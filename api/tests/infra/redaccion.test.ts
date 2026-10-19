@@ -25,6 +25,12 @@ import {
  * profundidad: no depende de que quien registra recuerde una ruta concreta.
  */
 
+/**
+ * Timeout de las propiedades de fast-check que generan cientos de textos: ~2,5 s con la máquina
+ * libre y 5-7 s con 12 procesos de CPU a la vez, y el 5 s de vitest las hacía fallar a ratos.
+ */
+const TIMEOUT_PROPIEDAD_MS = 30_000;
+
 /** Convierte lo redactado en un objeto, para poder indexarlo sin `any`. */
 function comoObjeto(valor: unknown): Record<string, unknown> {
   return valor as Record<string, unknown>;
@@ -597,32 +603,40 @@ describe('serializarRegistro: caracteres de control y separadores de línea', ()
     expect(serializarRegistro({ mensaje })).toBe(JSON.stringify({ mensaje }));
   });
 
-  it('propiedad: con cualquier texto, la salida no tiene saltos, controles C1 ni separadores de Unicode, y se lee de vuelta', () => {
-    fc.assert(
-      fc.property(fc.string({ unit: 'binary' }), (valor) => {
-        const texto = serializarRegistro({ dato: valor });
-        return (
-          !/[\r\n\u007f-\u009f\u2028\u2029]/.test(texto) &&
-          (JSON.parse(texto) as { dato: string }).dato === valor
-        );
-      }),
-      { numRuns: 500 },
-    );
-  });
+  it(
+    'propiedad: con cualquier texto, la salida no tiene saltos, controles C1 ni separadores de Unicode, y se lee de vuelta',
+    () => {
+      fc.assert(
+        fc.property(fc.string({ unit: 'binary' }), (valor) => {
+          const texto = serializarRegistro({ dato: valor });
+          return (
+            !/[\r\n\u007f-\u009f\u2028\u2029]/.test(texto) &&
+            (JSON.parse(texto) as { dato: string }).dato === valor
+          );
+        }),
+        { numRuns: 500 },
+      );
+    },
+    TIMEOUT_PROPIEDAD_MS,
+  );
 
-  it('propiedad: lo mismo con los caracteres peligrosos mezclados a la fuerza', () => {
-    const peligroso = fc.constantFrom(...PELIGROSOS, '\n', '\r', '\u0000', '\u001f');
-    fc.assert(
-      fc.property(
-        fc.array(fc.oneof(peligroso, fc.string({ maxLength: 3 })), { maxLength: 12 }),
-        (trozos) => {
-          const texto = serializarRegistro({ dato: trozos.join('') });
-          return !/[\r\n\u007f-\u009f\u2028\u2029]/.test(texto);
-        },
-      ),
-      { numRuns: 300 },
-    );
-  });
+  it(
+    'propiedad: lo mismo con los caracteres peligrosos mezclados a la fuerza',
+    () => {
+      const peligroso = fc.constantFrom(...PELIGROSOS, '\n', '\r', '\u0000', '\u001f');
+      fc.assert(
+        fc.property(
+          fc.array(fc.oneof(peligroso, fc.string({ maxLength: 3 })), { maxLength: 12 }),
+          (trozos) => {
+            const texto = serializarRegistro({ dato: trozos.join('') });
+            return !/[\r\n\u007f-\u009f\u2028\u2029]/.test(texto);
+          },
+        ),
+        { numRuns: 300 },
+      );
+    },
+    TIMEOUT_PROPIEDAD_MS,
+  );
 });
 
 describe('redactar: ancho máximo', () => {
@@ -694,15 +708,20 @@ describe('redactar: ancho máximo', () => {
   });
 
   it('un objeto de 200.000 claves o un array de 2 millones de huecos se resumen sin bloquear', () => {
+    // Las entradas se construyen ANTES de empezar a medir: construir 200.000 claves es lo más
+    // lento del test y no es lo que se vigila (con la máquina cargada pasaba de los 3 s).
+    const grande = objetoDe(200_000);
+    const huecos = new Array<number>(2_000_000);
     const inicio = performance.now();
 
-    const objeto = redactar(objetoDe(200_000)) as Record<string, unknown>;
-    const hueco = redactar(new Array<number>(2_000_000)) as unknown[];
+    const objeto = redactar(grande) as Record<string, unknown>;
+    const hueco = redactar(huecos) as unknown[];
+    const transcurrido = performance.now() - inicio;
 
     expect(Object.keys(objeto)).toHaveLength(101);
     expect(hueco).toHaveLength(101);
     // Antes del tope, un millón de claves tardaba segundos. Margen enorme para no ser frágil.
-    expect(performance.now() - inicio).toBeLessThan(3_000);
+    expect(transcurrido).toBeLessThan(3_000);
   });
 });
 
