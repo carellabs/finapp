@@ -8,6 +8,7 @@ import type { Env } from './config/env';
 import type { Pool } from './db/cliente';
 import { manejadorErrores, rutaNoEncontrada } from './http/errores';
 import { crearClaveCliente } from './http/ip-cliente';
+import { OPCIONES_HELMET, sinCache } from './http/cabeceras';
 import { alExcederElLimite } from './http/limite-excedido';
 import { verificarOrigen } from './http/origen';
 import { registrarAcceso } from './http/registro-acceso';
@@ -86,7 +87,10 @@ export function crearApp(
   // se saltaria todo lo que se responde antes de llegar a el.
   app.use(asignarRequestId);
   app.use(registrarAcceso());
-  app.use(helmet());
+  // Antes de `helmet` y de `cors` por lo mismo: lo que contestan ellos (la peticion previa) o lo
+  // que se rechaza mas abajo (403, 429, 400/413/415) tiene que llevar tambien `no-store`.
+  app.use(sinCache);
+  app.use(helmet(OPCIONES_HELMET));
   // `cors` va primero: responde por si mismo a la peticion previa (OPTIONS) de cualquier origen.
   app.use(cors({ origin: env.ORIGEN_FRONTEND, credentials: true }));
   // Segunda barrera anti-CSRF (la primera es SameSite=Strict). Solo lee cabeceras, asi que va
