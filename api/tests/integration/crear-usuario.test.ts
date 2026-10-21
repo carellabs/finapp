@@ -3,7 +3,7 @@ import { crearPool, type Pool } from '../../src/db/cliente';
 import { altaUsuario, type DependenciasAlta } from '../../src/auth/alta-usuario';
 import { guardarUsuario } from '../../src/auth/usuarios';
 import { hashearContrasena, verificarContrasena } from '../../src/auth/contrasena';
-import { ejecutarScript } from '../soporte/ejecutar-script';
+import { ejecutarScript, TIMEOUT_TEST_PROCESO_MS } from '../soporte/ejecutar-script';
 import { huellaDeLaBd } from '../soporte/huella-bd';
 
 /**
@@ -108,32 +108,36 @@ describe('altaUsuario contra la base de datos', () => {
   });
 });
 
-describe('crear-usuario sin terminal (proceso real) no escribe en la base de datos', () => {
-  const entorno = { DATABASE_URL: urlBd };
-  const tecleado = `ana\n${CONTRASENA}\n${CONTRASENA}\n`;
+describe(
+  'crear-usuario sin terminal (proceso real) no escribe en la base de datos',
+  { timeout: TIMEOUT_TEST_PROCESO_MS },
+  () => {
+    const entorno = { DATABASE_URL: urlBd };
+    const tecleado = `ana\n${CONTRASENA}\n${CONTRASENA}\n`;
 
-  it('con la contraseña por tubería falla y deja la base de datos exactamente como estaba', async () => {
-    // Un usuario que existe: si el script llegara a "actualizarlo", cambiaría su hash.
-    await guardarUsuario(pool, 'ana', 'hash-existente');
-    const antes = await huellaDeLaBd(pool);
+    it('con la contraseña por tubería falla y deja la base de datos exactamente como estaba', async () => {
+      // Un usuario que existe: si el script llegara a "actualizarlo", cambiaría su hash.
+      await guardarUsuario(pool, 'ana', 'hash-existente');
+      const antes = await huellaDeLaBd(pool);
 
-    const r = ejecutarScript('crear-usuario.ts', entorno, tecleado);
+      const r = ejecutarScript('crear-usuario.ts', entorno, tecleado);
 
-    expect(r.estado).toBe(1);
-    expect(r.errores).toMatch(/terminal interactiva/i);
-    expect(await huellaDeLaBd(pool)).toEqual(antes);
-    expect((await usuarios()).map((u) => u.password_hash)).toEqual(['hash-existente']);
-    // La contraseña tecleada no está en nada de lo que el proceso escribió.
-    expect(r.salida + r.errores).not.toContain(CONTRASENA);
-  });
+      expect(r.estado).toBe(1);
+      expect(r.errores).toMatch(/terminal interactiva/i);
+      expect(await huellaDeLaBd(pool)).toEqual(antes);
+      expect((await usuarios()).map((u) => u.password_hash)).toEqual(['hash-existente']);
+      // La contraseña tecleada no está en nada de lo que el proceso escribió.
+      expect(r.salida + r.errores).not.toContain(CONTRASENA);
+    });
 
-  it('control positivo: la misma base de datos SÍ se escribe cuando el alta se hace con terminal', async () => {
-    // Sin esto, "no ha escrito nada" podría ser una base de datos que no acepta escrituras.
-    const antes = await huellaDeLaBd(pool);
+    it('control positivo: la misma base de datos SÍ se escribe cuando el alta se hace con terminal', async () => {
+      // Sin esto, "no ha escrito nada" podría ser una base de datos que no acepta escrituras.
+      const antes = await huellaDeLaBd(pool);
 
-    await altaUsuario(altaReal('ana', CONTRASENA, []));
+      await altaUsuario(altaReal('ana', CONTRASENA, []));
 
-    expect(await huellaDeLaBd(pool)).not.toEqual(antes);
-    expect(await usuarios()).toHaveLength(1);
-  });
-});
+      expect(await huellaDeLaBd(pool)).not.toEqual(antes);
+      expect(await usuarios()).toHaveLength(1);
+    });
+  },
+);

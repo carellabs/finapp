@@ -28,6 +28,12 @@ Error:
 - **Nunca se acepta un id del cliente:** un `X-Request-Id` entrante se ignora (no se copia a la respuesta, al cuerpo ni al log).
 - **Todo** cuerpo de error lleva `error.request_id`, igual al de la cabecera y al de todas las líneas del log de esa petición (la línea de acceso y, si la hay, la del error). Hasta ahora lo llevaban solo los que pasaban por el manejador central; el 404 de una ruta inexistente no.
 - La cabecera no se expone con `Access-Control-Expose-Headers`: en producción la web y la API comparten origen y el cuerpo ya trae el id. En desarrollo (web en `:5173`, API en `:3000`) el id sigue yendo en el cuerpo.
+- **Cómo lo consume la web:** `web/src/lib/api-cliente.ts` es el único sitio que conoce el nombre `request_id`; lo traduce a `ErrorPeticion.requestId`. El cuerpo no es de fiar (un proxy o Caddy pueden contestar cualquier cosa): solo vale un texto de 1 a 100 caracteres de `[A-Za-z0-9_-]` (el servidor lo genera con `randomUUID()`; la web no acepta saltos de línea, `?`, `&`, `<`, espacios ni emojis), y sin él (o sin el sobre `error`) el id queda `undefined`.
+
+### Cabeceras de seguridad de toda respuesta
+
+- **`Cache-Control: no-store`** en **toda** respuesta que genera la app (éxito, error, `/health`, la petición previa de CORS, los 404): son datos financieros del usuario. Lo pone `sinCache` (`api/src/http/cabeceras.ts`), justo después del registro de acceso y antes de `helmet`, `cors` y la comprobación de origen, así que también lo llevan los 403, los 429 y los 400/413/415 del lector del cuerpo. Un endpoint nuevo no tiene que hacer nada; **no debe** poner otro `Cache-Control` (ni uno que cachee) sin una decisión explícita.
+- **`Content-Security-Policy: default-src 'none';frame-ancestors 'none'`** y el resto de cabeceras de helmet (con `X-Frame-Options: DENY`): la API sirve JSON, nunca un documento. Detalle, motivos y cruce con las cabeceras de las páginas (Caddy) en `security-engineering/references/controles.md`, «Cabeceras de la API».
 
 Código por estado (lo fija el manejador central, `api/src/http/errores.ts`; el mensaje es genérico; todos llevan `request_id`):
 

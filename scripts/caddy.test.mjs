@@ -30,6 +30,7 @@ import {
   imagenCaddy,
   parsearCsp,
   pedir,
+  pedirRechazable,
   RAIZ,
   valoresDe,
 } from './soporte/caddy-docker.mjs';
@@ -178,6 +179,8 @@ describe('Caddy en marcha, con la imagen oficial y el Caddyfile del repo', () =>
 
   /** Cada peticion al Caddy bajo prueba. */
   const pedirACaddy = (ruta, opciones) => pedir(`${base}${ruta}`, opciones);
+  /** Para un cuerpo que Caddy rechaza (413) y cierra sin esperar a que acabe el envio: tolera el EPIPE. */
+  const pedirRechazadoACaddy = (ruta, opciones) => pedirRechazable(`${base}${ruta}`, opciones);
   /** La API falsa devuelve lo que ha recibido: `{ metodo, url, cabeceras, remoto, cuerpo }`. */
   const eco = (respuesta) => JSON.parse(respuesta.cuerpo);
 
@@ -374,7 +377,12 @@ describe('Caddy en marcha, con la imagen oficial y el Caddyfile del repo', () =>
       const r = await pedirACaddy('/api/v1/meses');
 
       // Las pone la API falsa, como helmet pone las suyas: Caddy no las duplica ni las cambia.
-      assert.deepEqual(valoresDe(r, 'content-security-policy'), ["default-src 'none'"]);
+      // Las mismas que fija la API real (api/src/http/cabeceras.ts): la CSP de una respuesta JSON y,
+      // sobre todo, `no-store`, que Caddy no debe pisar con el `no-cache` de las paginas.
+      assert.deepEqual(valoresDe(r, 'content-security-policy'), [
+        "default-src 'none';frame-ancestors 'none'",
+      ]);
+      assert.deepEqual(valoresDe(r, 'cache-control'), ['no-store']);
       assert.deepEqual(valoresDe(r, 'strict-transport-security'), [
         'max-age=31536000; includeSubDomains',
       ]);
@@ -385,7 +393,6 @@ describe('Caddy en marcha, con la imagen oficial y el Caddyfile del repo', () =>
         'permissions-policy',
         'cross-origin-opener-policy',
         'x-content-type-options',
-        'cache-control',
       ]) {
         assert.deepEqual(valoresDe(r, cabecera), [], `Caddy anade ${cabecera} a /api`);
       }
@@ -395,7 +402,7 @@ describe('Caddy en marcha, con la imagen oficial y el Caddyfile del repo', () =>
       // La API limita el JSON a 100 kB: lo que pase de 1 MB no es una peticion de la app, y asi
       // Caddy no reenvia decenas de MB a la API solo para que los rechace.
       const cabeceras = { 'Content-Type': 'application/json' };
-      const grande = await pedirACaddy('/api/v1/transacciones', {
+      const grande = await pedirRechazadoACaddy('/api/v1/transacciones', {
         metodo: 'POST',
         cabeceras,
         cuerpo: 'x'.repeat(2_000_000),
@@ -404,7 +411,7 @@ describe('Caddy en marcha, con la imagen oficial y el Caddyfile del repo', () =>
       assert.equal(grande.cabeceras['x-eco-api'], undefined, 'el cuerpo llego a la API');
 
       // Sin Content-Length (troceado) tambien: el tope no depende de que el cliente declare el tamano.
-      const troceado = await pedirACaddy('/api/v1/transacciones', {
+      const troceado = await pedirRechazadoACaddy('/api/v1/transacciones', {
         metodo: 'POST',
         cabeceras,
         cuerpo: 'x'.repeat(3_000_000),
