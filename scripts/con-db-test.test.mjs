@@ -9,7 +9,7 @@
  * (argumentos con `shell: true`) revienta el test.
  */
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -18,24 +18,44 @@ import {
   instalarHerramientasFalsas,
   instalarNpmFalso,
   leerLlamadas,
+  MORIR_INTERRUMPIDO,
 } from './soporte/herramientas-falsas.mjs';
 import { ARGS_NODE_SIN_DEPRECACIONES, crearTemporales, ENTORNO_BASE } from './soporte/entorno.mjs';
 
 const RAIZ_FINAPP = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = join(RAIZ_FINAPP, 'scripts', 'con-db-test.mjs');
+const EN_WINDOWS = process.platform === 'win32';
 const temporales = crearTemporales();
 
 // Docker falso. `pg_isready` reproduce la imagen oficial de Postgres: mientras el entrypoint
 // inicializa la base arranca un servidor TEMPORAL que solo escucha por socket Unix, y el
 // definitivo (el que escucha por TCP) llega despues. Por socket responde siempre OK; por TCP
-// (`-h 127.0.0.1`) falla las primeras FALSA_FALLOS_TCP veces.
+// (`-h 127.0.0.1`) falla las primeras FALSA_FALLOS_TCP veces. Con FALSA_INTERRUMPE_EN=<orden>
+// (`run`, `exec`) la PRIMERA vez que se la llama esa orden de docker muere como por un Ctrl-C
+// (ver MORIR_INTERRUMPIDO) y con
+// FALSA_RUN_FALLA `docker run` sale con un 125 (un fallo normal).
 const PROGRAMA = `
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+${MORIR_INTERRUMPIDO}
 const [herramienta, ...args] = process.argv.slice(2);
 const registrar = (extra = {}) =>
   appendFileSync(process.env.FALSA_LOG, JSON.stringify({ herramienta, args, ...extra }) + '\\n');
 
-if (herramienta === 'docker' && args[0] === 'exec' && args.includes('pg_isready')) {
+const marcaInterrumpido = process.env.FALSA_ESTADO + '.interrumpido';
+if (
+  herramienta === 'docker' &&
+  args[0] === process.env.FALSA_INTERRUMPE_EN &&
+  !existsSync(marcaInterrumpido)
+) {
+  // Solo la PRIMERA vez: un Ctrl-C real mata el hijo que esta en curso, y los siguientes (si el
+  // script siguiera adelante, que es el defecto) funcionarian con normalidad.
+  writeFileSync(marcaInterrumpido, 'x');
+  registrar({ interrumpido: true });
+  await morirInterrumpido();
+} else if (herramienta === 'docker' && args[0] === 'run' && process.env.FALSA_RUN_FALLA) {
+  registrar();
+  process.exitCode = 125;
+} else if (herramienta === 'docker' && args[0] === 'exec' && args.includes('pg_isready')) {
   const porTcp = args.some((arg, i) => arg === '-h' && args[i + 1] === '127.0.0.1');
   let listo = true;
   if (porTcp) {
@@ -55,21 +75,41 @@ if (herramienta === 'docker' && args[0] === 'exec' && args.includes('pg_isready'
 }
 `;
 
-// El comando que con-db-test.mjs ejecuta cuando la base esta lista.
+// El comando que con-db-test.mjs ejecuta cuando la base esta lista. Con FALSA_COMANDO_SENAL muere
+// como por esa señal (ver MORIR_INTERRUMPIDO) y con FALSA_COMANDO_CODIGO sale con ese codigo.
 const COMANDO = `
 import { appendFileSync } from 'node:fs';
+${MORIR_INTERRUMPIDO}
 appendFileSync(
   process.env.FALSA_LOG,
   JSON.stringify({ herramienta: 'comando', databaseUrl: process.env.DATABASE_URL }) + '\\n',
 );
+if (process.env.FALSA_COMANDO_SENAL) await morirInterrumpido(process.env.FALSA_COMANDO_SENAL);
+if (process.env.FALSA_COMANDO_CODIGO) process.exitCode = Number(process.env.FALSA_COMANDO_CODIGO);
+// Colgado hasta que lo mate una señal (la del grupo de procesos, en los tests que la mandan).
+if (process.env.FALSA_COMANDO_COLGAR) await new Promise((resolver) => setTimeout(resolver, 120_000));
 `;
 
 /**
  * Ejecuta con-db-test.mjs con docker y npm falsos. `puerto` undefined = sin PUERTO_DB_TEST.
  * `fallosTcp`: cuantas veces `pg_isready -h 127.0.0.1` responde "todavia no". `prefijo`: nombre
  * de la carpeta temporal, donde viven los falsos (con espacios, para probar rutas con espacios).
+ * `entorno`: variables FALSA_* que dicen a los falsos como comportarse.
  */
-function ejecutar({ puerto, fallosTcp = 0, prefijo = 'finapp-con-db-test-' }) {
+function ejecutar(opciones) {
+  const { dir, log, env } = montar(opciones);
+
+  // cwd = la carpeta temporal y el comando con ruta relativa.
+  const r = spawnSync(
+    process.execPath,
+    [...ARGS_NODE_SIN_DEPRECACIONES, SCRIPT, 'node', 'comando.mjs'],
+    { cwd: dir, env, encoding: 'utf8', timeout: 120_000 },
+  );
+  return { status: r.status, salida: `${r.stdout}${r.stderr}`, llamadas: leerLlamadas(log) };
+}
+
+/** Monta la carpeta temporal con los falsos y devuelve el entorno aislado del script. */
+function montar({ puerto, fallosTcp = 0, prefijo = 'finapp-con-db-test-', entorno = {} }) {
   const dir = temporales.crear(prefijo);
   const log = join(dir, 'llamadas.jsonl');
   const herramientas = instalarHerramientasFalsas(dir, ['docker'], PROGRAMA);
@@ -80,21 +120,42 @@ function ejecutar({ puerto, fallosTcp = 0, prefijo = 'finapp-con-db-test-' }) {
     FALSA_ESTADO: join(dir, 'sondeos-tcp.txt'),
     FALSA_FALLOS_TCP: String(fallosTcp),
     npm_execpath: instalarNpmFalso(dir),
+    ...entorno,
   };
   if (puerto !== undefined) base.PUERTO_DB_TEST = String(puerto);
+  return { dir, log, env: herramientas.entorno(base, { aislado: true }) };
+}
 
-  // cwd = la carpeta temporal y el comando con ruta relativa.
-  const r = spawnSync(
+/**
+ * Lanza con-db-test.mjs en SU PROPIO GRUPO de procesos (POSIX), con un comando que se queda
+ * colgado, y le manda `senal` al grupo entero: la entrega real de un Ctrl-C de terminal (que llega
+ * al script y al hijo a la vez) o de un `kill -TERM -<grupo>`. Espera a que el comando este en
+ * marcha (un hecho, no un tiempo) y al cierre del script.
+ */
+async function ejecutarYSenalar(senal, { puerto }) {
+  const { dir, log, env } = montar({ puerto, entorno: { FALSA_COMANDO_COLGAR: '1' } });
+  const hijo = spawn(
     process.execPath,
     [...ARGS_NODE_SIN_DEPRECACIONES, SCRIPT, 'node', 'comando.mjs'],
-    {
-      cwd: dir,
-      env: herramientas.entorno(base, { aislado: true }),
-      encoding: 'utf8',
-      timeout: 120_000,
-    },
+    { cwd: dir, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
   );
-  return { status: r.status, salida: `${r.stdout}${r.stderr}`, llamadas: leerLlamadas(log) };
+  let salida = '';
+  for (const flujo of [hijo.stdout, hijo.stderr]) flujo.on('data', (trozo) => (salida += trozo));
+  const cierre = new Promise((resolver) =>
+    hijo.on('close', (status, porSenal) => resolver({ status, porSenal })),
+  );
+  // Red de seguridad: si algo se cuelga, se mata el grupo (por su PID) y el test falla.
+  const guarda = setTimeout(() => process.kill(-hijo.pid, 'SIGKILL'), 80_000);
+  try {
+    while (!leerLlamadas(log).some((l) => l.herramienta === 'comando')) {
+      await new Promise((resolver) => setTimeout(resolver, 50));
+    }
+    process.kill(-hijo.pid, senal);
+    const { status, porSenal } = await cierre;
+    return { status, porSenal, salida, llamadas: leerLlamadas(log) };
+  } finally {
+    clearTimeout(guarda);
+  }
 }
 
 const esDocker = (llamada, orden) => llamada.herramienta === 'docker' && llamada.args[0] === orden;
@@ -200,5 +261,121 @@ describe('con-db-test', () => {
       r.llamadas.some((l) => l.herramienta === 'comando'),
       'no ejecuto el comando',
     );
+  });
+
+  // ─────────────────────────────── interrupciones y limpieza ───────────────────────────────
+  //
+  // El script es SINCRONO: mientras `spawnSync` espera a un hijo, ningun manejador de `process.on`
+  // corre. Un Ctrl-C llega al hijo en curso y al propio script; si el hijo muere (por la señal, o
+  // con el STATUS_CONTROL_C_EXIT de Windows) el script tiene que darse cuenta, destruir el
+  // contenedor y salir con 130, y no seguir como si nada. Que el contenedor se destruya NO
+  // depende del manejador de señales sino del evento `exit`, que se dispara en cuanto el script
+  // sale; lo que si dependia de la señal era seguir ejecutando pasos tras un Ctrl-C.
+
+  /** Cada llamada como una palabra: `docker rm`, `docker run`, `npm`, `comando`... */
+  const secuencia = (llamadas) =>
+    llamadas.map((l) => (l.herramienta === 'docker' ? `docker ${l.args[0]}` : l.herramienta));
+
+  const INICIO = ['docker info', 'docker rm', 'docker run'];
+  const ESPERA = [...INICIO, 'docker exec'];
+  const MIGRACION = [...ESPERA, 'npm'];
+
+  // Por cada paso que lanza un proceso: cuando el hijo muere como por un Ctrl-C el script no
+  // ejecuta nada mas que la destruccion del contenedor, una sola vez (y el `rm` inicial, de un
+  // huerfano, es OTRA llamada: solo hay dos `docker rm` en total).
+  const PASOS = [
+    {
+      nombre: 'el arranque del contenedor (docker run)',
+      entorno: { FALSA_INTERRUMPE_EN: 'run' },
+      esperado: [...INICIO, 'docker rm'],
+    },
+    {
+      nombre: 'la espera a pg_isready',
+      entorno: { FALSA_INTERRUMPE_EN: 'exec' },
+      esperado: [...ESPERA, 'docker rm'],
+    },
+    {
+      nombre: 'las migraciones (npm run migrate:up)',
+      entorno: { FALSA_NPM_INTERRUMPE: '1' },
+      esperado: [...MIGRACION, 'docker rm'],
+    },
+    {
+      nombre: 'el comando del usuario',
+      entorno: { FALSA_COMANDO_SENAL: 'SIGINT' },
+      esperado: [...MIGRACION, 'comando', 'docker rm'],
+    },
+  ];
+
+  for (const { nombre, entorno, esperado } of PASOS) {
+    it(`un Ctrl-C que mata el proceso hijo durante ${nombre}: destruye el contenedor una sola vez, no ejecuta nada mas y sale con 130`, () => {
+      const r = ejecutar({ puerto: 55434, entorno });
+
+      assert.deepEqual(secuencia(r.llamadas), esperado, r.salida);
+      assert.equal(r.status, 130, r.salida);
+      assert.match(r.salida, /interrump/i);
+      const borrados = r.llamadas.filter((l) => esDocker(l, 'rm'));
+      assert.equal(borrados.length, 2, 'el rm inicial y UNO al salir');
+      assert.deepEqual(nombresDeContenedor(r.llamadas), ['finapp-db-test-55434']);
+    });
+  }
+
+  // SIGTERM solo se puede entregar de verdad en POSIX: en Windows `process.kill` es una
+  // terminacion forzosa y el padre no ve ninguna señal. Ahi lo cubre el test de la funcion pura
+  // (scripts/imagenes-soporte.test.mjs) y el de Linux de CI.
+  if (!EN_WINDOWS) {
+    it('un SIGTERM que mata el comando del usuario: destruye el contenedor y sale con 143', () => {
+      const r = ejecutar({ puerto: 55434, entorno: { FALSA_COMANDO_SENAL: 'SIGTERM' } });
+
+      assert.deepEqual(secuencia(r.llamadas), [...MIGRACION, 'comando', 'docker rm'], r.salida);
+      assert.equal(r.status, 143, r.salida);
+      assert.equal(r.llamadas.filter((l) => esDocker(l, 'rm')).length, 2);
+    });
+
+    // La entrega REAL: la señal llega al script y al hijo a la vez, como un Ctrl-C de terminal.
+    // Sin los manejadores vacios Node moriria en el acto por la señal, sin pasar por `exit`, y el
+    // contenedor quedaria sin destruir: el `rm` final no existiria.
+    for (const [senal, codigo] of [
+      ['SIGINT', 130],
+      ['SIGTERM', 143],
+    ]) {
+      it(`un ${senal} real al grupo de procesos mientras el comando del usuario espera: el script no muere sin limpiar, destruye el contenedor y sale con ${codigo}`, async () => {
+        const r = await ejecutarYSenalar(senal, { puerto: 55434 });
+
+        assert.equal(
+          r.porSenal,
+          null,
+          `el script murio por la señal sin pasar por exit: ${r.salida}`,
+        );
+        assert.equal(r.status, codigo, r.salida);
+        assert.deepEqual(secuencia(r.llamadas), [...MIGRACION, 'comando', 'docker rm'], r.salida);
+        assert.match(r.salida, /interrump/i);
+      });
+    }
+  }
+
+  // Controles positivos: lo que NO es una interrupcion sigue igual.
+  it('un comando que falla con un codigo normal: el script sale con ese codigo, sin decir que se interrumpio, y destruye el contenedor una vez', () => {
+    const r = ejecutar({ puerto: 55434, entorno: { FALSA_COMANDO_CODIGO: '3' } });
+
+    assert.equal(r.status, 3, r.salida);
+    assert.doesNotMatch(r.salida, /interrump/i);
+    assert.deepEqual(secuencia(r.llamadas), [...MIGRACION, 'comando', 'docker rm']);
+  });
+
+  it('si docker run falla con un codigo normal: FALLO, sale con 1, no sigue y destruye el contenedor una sola vez', () => {
+    const r = ejecutar({ puerto: 55434, entorno: { FALSA_RUN_FALLA: '1' } });
+
+    assert.equal(r.status, 1, r.salida);
+    assert.match(r.salida, /FALLO: no se pudo arrancar el contenedor/);
+    assert.doesNotMatch(r.salida, /interrump/i);
+    assert.deepEqual(secuencia(r.llamadas), [...INICIO, 'docker rm']);
+  });
+
+  it('una ejecucion normal destruye el contenedor una sola vez al salir (ademas del rm inicial)', () => {
+    const r = ejecutar({ puerto: 55434 });
+
+    assert.equal(r.status, 0, r.salida);
+    assert.deepEqual(secuencia(r.llamadas), [...MIGRACION, 'comando', 'docker rm']);
+    assert.equal(r.llamadas.filter((l) => esDocker(l, 'rm')).length, 2);
   });
 });

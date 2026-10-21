@@ -1041,6 +1041,78 @@ describe('imágenes: construcción y verificación (build:imagenes, test:imagene
   });
 });
 
+// ───────────────────── scripts con recursos que limpiar: interrupciones ─────────────────────
+
+describe('scripts/ con recursos que limpiar: la muerte de un hijo por una señal se trata en el envoltorio, no con process.on', () => {
+  // Un script SINCRONO (`spawnSync`) no ejecuta ningun manejador de señales mientras espera a un
+  // hijo: `process.on('SIGINT', () => { limpiar(); process.exit(130); })` es codigo muerto (issue
+  // #36). La limpieza cuelga de `exit` y quien se entera de la señal es el envoltorio de
+  // scripts/imagenes-soporte.mjs (un hijo con `signal`, con `error` o sin `status` va a la limpieza).
+  const scriptsDeGates = () =>
+    readdirSync(join(ROOT, 'scripts'))
+      .filter((f) => f.endsWith('.mjs') && !f.endsWith('.test.mjs'))
+      .sort();
+  /** El codigo sin comentarios (ni de linea ni de bloque ni JSDoc). */
+  const codigoDe = (rel) =>
+    read(rel)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+  /** Los scripts que registran una limpieza al salir, es decir, los que tienen recursos. */
+  const conLimpieza = () =>
+    scriptsDeGates().filter((f) => /\bprocess\.on\('exit'/.test(codigoDe(`scripts/${f}`)));
+
+  test('`spawnSync` solo se usa en scripts/procesos.mjs: el resto lanza procesos con `lanzar` y su envoltorio', () => {
+    const usan = scriptsDeGates().filter((f) => /\bspawnSync\b/.test(codigoDe(`scripts/${f}`)));
+    assert.deepEqual(usan, ['procesos.mjs']);
+    // Control positivo: el detector ve los scripts y ve a los que usan `lanzar`.
+    assert.ok(scriptsDeGates().includes('con-db-test.mjs'));
+    assert.match(codigoDe('scripts/con-db-test.mjs'), /\blanzar\(/);
+  });
+
+  test('los scripts con recursos que limpiar son con-db-test y verificar-imagenes, y ambos pasan sus hijos por el envoltorio', () => {
+    // Si aparece otro script con `process.on('exit')`, este test obliga a mirarlo: ¿tiene hijos
+    // que pueden morir por una señal?
+    assert.deepEqual(conLimpieza(), ['con-db-test.mjs', 'verificar-imagenes.mjs']);
+    for (const fichero of conLimpieza()) {
+      const codigo = codigoDe(`scripts/${fichero}`);
+      // (assert.ok y no assert.match: un fallo de `match` vuelca el fichero entero.)
+      assert.ok(/from '\.\/imagenes-soporte\.mjs'/.test(codigo), `${fichero} no usa el envoltorio`);
+      assert.ok(/\bcrear(Lanzador|Docker)\(lanzar, /.test(codigo), `${fichero} no lo crea`);
+    }
+  });
+
+  test('esos scripts instalan manejadores de SIGINT y SIGTERM VACIOS (y ninguno con cuerpo): solo impiden que Node muera sin pasar por `exit`', () => {
+    for (const fichero of conLimpieza()) {
+      const codigo = codigoDe(`scripts/${fichero}`);
+      for (const senal of ['SIGINT', 'SIGTERM']) {
+        assert.ok(
+          new RegExp(`process\\.on\\('${senal}', \\(\\) => \\{\\}\\);`).test(codigo),
+          `${fichero}: falta process.on('${senal}', () => {})`,
+        );
+      }
+      // Cualquier otro manejador de señal con cuerpo seria codigo que no corre.
+      const conCuerpo = [...codigo.matchAll(/process\.on\('SIG\w+', ([^)]*)\) => \{(?!\})/g)];
+      assert.deepEqual(
+        conCuerpo.map((m) => m[0]),
+        [],
+        `${fichero}: un manejador de señal con cuerpo no corre mientras spawnSync espera`,
+      );
+    }
+  });
+
+  test('con-db-test.mjs: el único proceso que lanza fuera del envoltorio es la destruccion del contenedor, y destruye al salir', () => {
+    const codigo = codigoDe('scripts/con-db-test.mjs');
+    assert.match(codigo, /^const lanzarSeguro = crearLanzador\(lanzar, interrumpido\);$/m);
+    // `lanzar(` a secas: la destruccion (que corre dentro de `exit`, donde no se puede volver a salir).
+    const sueltos = [...codigo.matchAll(/\blanzar\(/g)];
+    assert.equal(sueltos.length, 1, 'lanzar(...) sin envoltorio fuera de destruir()');
+    assert.match(codigo, /function destruir\(\) \{\s*lanzar\('docker', \['rm', '-f', CONTENEDOR\]/);
+    assert.match(codigo, /^process\.on\('exit', destruir\);$/m);
+    // La destruccion de los fallos sale por `exit`: llamarla ademas a mano la ejecutaria dos veces.
+    assert.equal([...codigo.matchAll(/\bdestruir\(\)/g)].length, 2, 'declaracion + rm inicial');
+  });
+});
+
 // ──────────────────────────────────── pr-policy.yml ────────────────────────────────────
 
 describe('pr-policy.yml: privilegio mínimo', () => {

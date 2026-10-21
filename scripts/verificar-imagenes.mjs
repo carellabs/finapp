@@ -98,8 +98,9 @@ process.on('exit', limpiar);
 // muere en el acto: el `spawnSync` en curso vuelve, el envoltorio de `docker` ve la señal, y
 // `fallar` limpia y sale. Sin él, node moriría sin pasar por el evento `exit` y quedarían la red,
 // el Postgres y las imágenes. (El manejador no puede ser quien salga: el script es síncrono y un
-// manejador no corre hasta que el bucle de eventos está libre.)
+// manejador no corre hasta que el bucle de eventos está libre.) Lo mismo con SIGTERM.
 process.on('SIGINT', () => {});
+process.on('SIGTERM', () => {});
 
 for (const [objetivo, etiqueta] of [
   ['migrate', IMAGEN_MIGRATE],
