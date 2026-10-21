@@ -1,4 +1,5 @@
 import { restar } from '../money/cents';
+import { formatearEuros } from '../money/formato';
 import type { MesCobertura } from '../time/mes-cobertura';
 import type { Transaccion } from '../domain/tipos';
 import { calcularTotales } from '../domain/totales';
@@ -22,7 +23,7 @@ export function insightEventosPuntuales(
   return [
     {
       id: 'eventos-puntuales',
-      titulo: `Sin tus gastos puntuales, este mes habría sido de ${(sinPuntual / 100).toFixed(2)} €`,
+      titulo: `Sin tus gastos puntuales, este mes habría sido de ${formatearEuros(sinPuntual)}`,
       evidencia: [
         { etiqueta: 'Gasto total del mes', cents: gastos },
         { etiqueta: 'Gasto puntual', cents: puntual },

@@ -1,4 +1,5 @@
 import { multiplicarPorFactor } from '../money/cents';
+import { formatearEuros } from '../money/formato';
 import type { FechaISO } from '../time/fecha';
 import { mesDeFecha, type MesCobertura } from '../time/mes-cobertura';
 import type { Transaccion } from '../domain/tipos';
@@ -38,7 +39,7 @@ export function insightVelocidadGasto(
   return [
     {
       id: 'velocidad-gasto',
-      titulo: `A este ritmo, cerrarás el mes en torno a ${(proyeccionCierre / 100).toFixed(2)} €`,
+      titulo: `A este ritmo, cerrarás el mes en torno a ${formatearEuros(proyeccionCierre)}`,
       evidencia: [
         { etiqueta: 'Gasto acumulado', cents: gastoAcumulado },
         { etiqueta: 'Día del mes', numero: diaDelMes },

@@ -1,4 +1,5 @@
 import { sumar } from '../money/cents';
+import { formatearEuros } from '../money/formato';
 import type { MesCobertura } from '../time/mes-cobertura';
 import type { Transaccion } from '../domain/tipos';
 import { gastoPorNecesidad } from '../domain/agregados';
@@ -24,7 +25,7 @@ export function insightGastoReducible(
   return [
     {
       id: 'gasto-reducible',
-      titulo: `De tus ${(total / 100).toFixed(2)} €, ${(reducible / 100).toFixed(2)} € son negociables`,
+      titulo: `De tus ${formatearEuros(total)}, ${formatearEuros(reducible)} son negociables`,
       evidencia: [
         { etiqueta: 'Gasto total del mes', cents: total },
         { etiqueta: 'Gasto reducible (Flexible + Prescindible)', cents: reducible },

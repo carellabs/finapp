@@ -25,6 +25,13 @@ describe('formato es-ES', () => {
     expect(normalizar(formatearEuros(cents(1_234_56)))).toBe('1.234,56 €');
   });
 
+  it('un negativo de 4 cifras lleva el signo "-" (ASCII) delante y su punto de millar', () => {
+    // Los textos de las conclusiones (issue #35) usan esta misma funcion: el signo
+    // es el guion normal, no el menos tipografico (U+2212), y el simbolo va tras U+00A0.
+    expect(formatearEuros(cents(-1_195_00))).toBe('-1.195,00 €');
+    expect(formatearEuros(cents(0))).toBe('0,00 €');
+  });
+
   it('usa coma decimal y punto de millar, nunca al reves', () => {
     const formateado = normalizar(formatearEuros(cents(1_234_567_89)));
     expect(formateado).toBe('1.234.567,89 €');
