@@ -1,3 +1,4 @@
+import { formatearEuros } from '../money/formato';
 import type { AlertaObjetivoAlza } from '../objetivos/objetivo-movil';
 import type { Insight, ResolverNombreCategoria } from './tipos';
 
@@ -19,7 +20,7 @@ export function insightAlertaObjetivoAlza(
   return [
     {
       id: 'alerta-objetivo-alza',
-      titulo: `Tu objetivo ha subido ${(alerta.delta / 100).toFixed(2)} € este mes. Causa principal: ${nombreCategoria}`,
+      titulo: `Tu objetivo ha subido ${formatearEuros(alerta.delta)} este mes. Causa principal: ${nombreCategoria}`,
       evidencia: [
         { etiqueta: 'Subida del objetivo', cents: alerta.delta },
         { etiqueta: 'Categoría que más empujó', texto: nombreCategoria },

@@ -1,4 +1,5 @@
 import { media, multiplicarPorFactor, type Cents } from '../money/cents';
+import { formatearEuros } from '../money/formato';
 import type { MesCobertura } from '../time/mes-cobertura';
 import type { Transaccion } from '../domain/tipos';
 import { calcularSuficiencia } from '../objetivos/tipos';
@@ -60,7 +61,7 @@ export function insightSuscripciones(
 
         insights.push({
           id: `suscripcion-${categoriaId}-${String(referencia)}`,
-          titulo: `Detectamos un cargo de ~${(importeMedio / 100).toFixed(2)} € repetido en ${resolverNombre(categoriaId)}`,
+          titulo: `Detectamos un cargo de ~${formatearEuros(importeMedio)} repetido en ${resolverNombre(categoriaId)}`,
           evidencia: [
             { etiqueta: 'Importe medio del cargo', cents: importeMedio },
             { etiqueta: 'Meses detectados', numero: mejorRacha },
