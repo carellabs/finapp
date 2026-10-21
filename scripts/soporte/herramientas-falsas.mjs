@@ -20,12 +20,33 @@ import { pathToFileURL } from 'node:url';
 
 const EN_WINDOWS = process.platform === 'win32';
 
-// npm falso: lo que ejecuta `node $npm_execpath ...`. Registra sus argumentos y falla si el
-// script que se le pide (`npm run <script>`) es FALSA_NPM_FALLA_EN.
+/**
+ * Codigo (para incrustar en el `programa` de una herramienta falsa o de un comando falso) que
+ * define `morirInterrumpido(senal)`: termina el proceso como lo haria si le llegara un Ctrl-C, de
+ * la unica forma que cada sistema permite reproducir de forma determinista:
+ *  - POSIX: se manda la señal a si mismo; el padre ve `status: null, signal: <senal>`.
+ *  - Windows: no hay señales entre procesos. Un Ctrl-C real deja al hijo con el codigo de salida
+ *    STATUS_CONTROL_C_EXIT (0xC000013A, medido con un GenerateConsoleCtrlEvent real) y sin
+ *    `signal`; es lo que se imita. Solo existe esa forma, la de SIGINT.
+ */
+export const MORIR_INTERRUMPIDO = `
+async function morirInterrumpido(senal = 'SIGINT') {
+  if (process.platform === 'win32') process.exit(0xC000013A);
+  process.kill(process.pid, senal);
+  // La señal se entrega de forma asincrona: no se sigue hasta que mate al proceso.
+  await new Promise((resolver) => setTimeout(resolver, 60_000));
+}
+`;
+
+// npm falso: lo que ejecuta `node $npm_execpath ...`. Registra sus argumentos, falla si el
+// script que se le pide (`npm run <script>`) es FALSA_NPM_FALLA_EN y muere como por un Ctrl-C si
+// FALSA_NPM_INTERRUMPE esta definida.
 const NPM_FALSO = `
 import { appendFileSync } from 'node:fs';
+${MORIR_INTERRUMPIDO}
 const args = process.argv.slice(2);
 appendFileSync(process.env.FALSA_LOG, JSON.stringify({ herramienta: 'npm', args }) + '\\n');
+if (process.env.FALSA_NPM_INTERRUMPE) await morirInterrumpido();
 if (args[1] === process.env.FALSA_NPM_FALLA_EN) process.exitCode = 1;
 `;
 
