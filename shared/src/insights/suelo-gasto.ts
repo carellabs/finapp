@@ -1,4 +1,5 @@
 import { media } from '../money/cents';
+import { formatearEuros } from '../money/formato';
 import type { MesCobertura } from '../time/mes-cobertura';
 import type { Transaccion } from '../domain/tipos';
 import { gastoPorRecurrencia } from '../domain/agregados';
@@ -20,7 +21,7 @@ export function insightSueloDeGasto(
   return [
     {
       id: 'suelo-gasto-real',
-      titulo: `Necesitas ${(suelo / 100).toFixed(2)} €/mes para vivir, al margen de lo que decidas gastar`,
+      titulo: `Necesitas ${formatearEuros(suelo)}/mes para vivir, al margen de lo que decidas gastar`,
       evidencia: [
         { etiqueta: 'Suelo de gasto mensual', cents: suelo },
         { etiqueta: 'Meses usados en la media', numero: mesesUsados.length },

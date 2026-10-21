@@ -1,3 +1,5 @@
+import { CERO } from '../money/cents';
+import { formatearEuros } from '../money/formato';
 import type { ResultadoFondoEmergencia } from '../objetivos/fondo-emergencia';
 import type { ResultadoProyeccion } from '../objetivos/proyeccion';
 import type { Suficiencia } from '../objetivos/tipos';
@@ -32,7 +34,7 @@ export function insightProgresoFondo(
       ],
       ...(proyeccion.avisoRitmoInsuficiente
         ? {
-            accionSugerida: `Necesitarías ahorrar al menos ${((proyeccion.ahorroMinimoNecesario ?? 0) / 100).toFixed(2)} €/mes para lograrlo en el horizonte de referencia.`,
+            accionSugerida: `Necesitarías ahorrar al menos ${formatearEuros(proyeccion.ahorroMinimoNecesario ?? CERO)}/mes para lograrlo en el horizonte de referencia.`,
           }
         : {}),
       suficiencia: suficienciaCSM,
