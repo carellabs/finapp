@@ -40,7 +40,7 @@ RUN npm run build -w @finapp/web
 # ── Produccion: Caddy INTERNO, un solo origen ────────────────────────────────
 # Sin TLS (lo termina Cloudflare) y sin puertos publicados: solo lo alcanza `cloudflared`.
 # Version Y digest, como el resto de imagenes: Dependabot (grupo `docker`) la vigila.
-FROM caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f AS production
+FROM caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee AS production
 # Sin certificados ni estado propio: Caddy solo guarda un id de instancia y un cerrojo. Va a
 # /tmp para que pueda escribir sin ser root (y con el sistema de ficheros en solo lectura mas
 # un tmpfs en /tmp). `persist_config off` en el Caddyfile evita escribir en /config.
