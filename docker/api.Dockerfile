@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Contexto de build: la raiz del monorepo (npm workspaces).
 
-FROM node:24.21.0-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS base
+FROM node:24.22.0-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS base
 WORKDIR /app
 RUN apk add --no-cache tini && chown node:node /app
 
@@ -76,7 +76,7 @@ RUN npm ci --ignore-scripts \
  && npm query "$(node scripts/cierre-selector.mjs node-pg-migrate)" \
   | node scripts/cierre-dependencias.mjs /app/cierre node-pg-migrate
 
-FROM node:24.21.0-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS migrate
+FROM node:24.22.0-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS migrate
 ENV NODE_ENV=production
 WORKDIR /app
 RUN apk add --no-cache tini
@@ -89,7 +89,7 @@ CMD ["up"]
 # Imagen final: sin toolchain, sin devDependencies, usuario no-root.
 # Lleva tambien el alta de usuario compilada (`dist/crear-usuario.js`, ver tsup.config.ts): no
 # hay tsx. Se ejecuta a mano, en una terminal, con `node dist/crear-usuario.js`.
-FROM node:24.21.0-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1 AS production
+FROM node:24.22.0-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f AS production
 ENV NODE_ENV=production
 WORKDIR /app
 RUN apk add --no-cache tini
