@@ -13,7 +13,7 @@
     "coverage": "vitest run --coverage"
   },
   "devDependencies": {
-    "fast-check": "^4.10.2"
+    "fast-check": "^4.10.3"
   },
   "dependencies": {
     "zod": "^4.6.7"
